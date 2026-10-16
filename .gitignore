@@ -21,3 +21,6 @@ build.log
 *.orig
 *.prev
 tune/*.bak_*
+
+# 제어기가 0.2초마다 덮어쓰는 상태 파일
+tune/status.json
