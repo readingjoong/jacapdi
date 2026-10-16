@@ -1,0 +1,13 @@
+tag=1010_052145_H_conf0.3
+algo=H (H_boundary_fit.py) md5=e0675d0e1fed08033c84a5f9bfde5789
+conf=0.3
+controller=/home/sean/jacapdi-docker/drive_controller_tunable.yaml
+  left_speed_command: 240
+  right_speed_command: 240
+  max_steering_step: 100   # [10/10] 펌웨어 1010f: ±100 (1% 단위). 예전 펌웨어(±7)면 7
+  stanley_gain: 0.8
+  heading_gain: 0.1
+ipm=/home/sean/jacapdi-docker/ipm_c920.yaml
+# 2026-09-24 07:29:20 calib_pitch.py: f=560 h=0.607 pitch=17.00deg (rows 3837, lane width 0.847m). 전방 0.84~1.40m, 좌우 +-0.8m.
+webcam=/dev/video5
+Sat Oct 10 05:21:46 UTC 2026

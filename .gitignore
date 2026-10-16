@@ -1,0 +1,23 @@
+# 주행할 때 쓰는 코드·스크립트·설정만 git 에 올린다. 큰 기록·사진·백업 사본은 뺌.
+
+# 주행 기록 (사진·로그, 수십 GB)
+ab_runs/
+ghost_runs/
+
+# 사진·동영상 (최고 주행 폴더의 frames/, mp4 포함)
+frames/
+*.mp4
+*.jpg
+*.png
+
+# 파이썬 캐시, 빌드 로그
+__pycache__/
+*.pyc
+build.log
+
+# 손으로 만든 백업 사본 (git 이 대신함)
+*.bak_*
+*.ghost_*
+*.orig
+*.prev
+tune/*.bak_*
