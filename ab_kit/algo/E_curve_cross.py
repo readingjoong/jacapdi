@@ -74,8 +74,8 @@ class LinePathNodeE(Node):
         self.transverse_deg = p("transverse_deg", 60.0).value     # [E1] 이 각도보다 누운 실선은 버림
 
         # --- 얼마나 멀리 볼지 ---
-        self.near_range_m = p("near_range_m", 0.5).value        # [E3] 평소 쓰는 거리 (x=0 부터)
-        self.ext_range_m = p("ext_range_m", 0.75).value          # 점이 부족할 때 넓혀 볼 최대 거리
+        self.near_range_m = p("near_range_m", 0.45).value        # [E3] 평소 쓰는 거리 (x=0 부터)
+        self.ext_range_m = p("ext_range_m", 0.7).value          # 점이 부족할 때 넓혀 볼 최대 거리
 
         # --- 안전 관련 ---
         self.max_image_age = p("max_image_age_sec", 0.3).value  # 사진이 이보다 오래됐으면 쓰지 않음

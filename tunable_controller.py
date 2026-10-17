@@ -150,6 +150,7 @@ class Tunable(Node):
             off_tracking = 0.5 * (WHEELBASE ** 2) * curv   # 우회전이면 curv<0 이므로 shift는 왼쪽(+)으로
             shift = p["path_offset_m"] - off_tracking
             
+
             # (3) Stanley 로 조향각(라디안) 계산
             delta, dbg = self.ctrl.compute_delta((t.a, t.b, t.c + shift), p["vehicle_speed_mps"])
             # (3-1) [I 항] 직선에서 한쪽으로 계속 벗어나 있으면 조금씩 더 꺾기. 끝까지 꺾고 있으면(=포화) 쌓지 않음
