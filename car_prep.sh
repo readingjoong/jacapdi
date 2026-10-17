@@ -43,9 +43,9 @@ sleep 4
 FW=$(grep -o "DRIVING_TEAM[^ ]*" "$RUN/board.log" | head -1)
 ADC=$(grep -o "IDLE ADC=[0-9]*" "$RUN/board.log" | tail -1)
 [ "$FW" = "$FW_NAME" ] && say "   펌웨어 $FW, 조향 $ADC" || warn "   펌웨어가 $FW_NAME 이 아님 (보드: ${FW:-응답없음}). 업로드: ~/jacapdi-docker/car_flash.sh"
-A=${ADC#IDLE ADC=}   # 조향 가변저항 값이 정상 범위(360~570, 펌웨어 1016 기준)인지 확인
-if [ -n "$A" ] && { [ "$A" -lt 360 ] || [ "$A" -gt 570 ]; }; then
-  printf '\033[1;31m[car]    !!! 조향 가변저항 값 %s = 비정상 (정상 400~530). 출발하면 펌웨어가 바로 모터를 끔 (adc_out_of_range).\n[car]    !!! 1023 = GND 선 빠짐/신호가 5V 에 닿음, 0 = 신호선 빠짐/GND 에 닿음. 배터리·USB 끄고 가변저항 배선 확인\033[0m\n' "$A"
+A=${ADC#IDLE ADC=}   # 조향 가변저항 값이 정상 범위(351~601, 펌웨어 1016r 기준)인지 확인
+if [ -n "$A" ] && { [ "$A" -lt 351 ] || [ "$A" -gt 601 ]; }; then
+  printf '\033[1;31m[car]    !!! 조향 가변저항 값 %s = 비정상 (정상 391~561). 출발하면 펌웨어가 바로 모터를 끔 (adc_out_of_range).\n[car]    !!! 1023 = GND 선 빠짐/신호가 5V 에 닿음, 0 = 신호선 빠짐/GND 에 닿음. 배터리·USB 끄고 가변저항 배선 확인\033[0m\n' "$A"
 fi
 
 say "5/6 실시간 화면"

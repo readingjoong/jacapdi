@@ -65,9 +65,9 @@ const uint8_t LEFT_2 = 7;       // 왼쪽 뒷바퀴: 뒤로
 const uint8_t POT = A2;         // 조향 가변저항 신호
 
 // ---------- 조향 가변저항 보정값 (바퀴 위치 ↔ ADC 숫자) ----------
-const int POT_LEFT = 530;       // [1016] 왼쪽 끝까지 돌렸을 때 ADC (2026-10-16 손으로 3번 잼 525/535/530 중 마지막, 전엔 543)
-const int POT_CENTER = 462;     // [1016] 똑바로일 때 ADC. 손으로 4번 잼 474/450/457/467 → 평균 462 (예전 값과 같음)
-const int POT_RIGHT = 400;      // [1016] 오른쪽 끝까지 돌렸을 때 ADC (3번 잼 392/401/400 중 마지막, 전엔 391)
+const int POT_LEFT = 561;       // [1016] 왼쪽 끝까지 돌렸을 때 ADC (2026-10-16 손으로 3번 잼 525/535/530 중 마지막, 전엔 543)
+const int POT_CENTER = 476;     // [1016] 똑바로일 때 ADC. 손으로 4번 잼 474/450/457/467 → 평균 462 (예전 값과 같음)
+const int POT_RIGHT = 391;      // [1016] 오른쪽 끝까지 돌렸을 때 ADC (3번 잼 392/401/400 중 마지막, 전엔 391)
 const int END_MARGIN = 3;       // [1009] 왼쪽 끝에서 이만큼 덜 가서 멈춤 (기계 끝에 쾅 부딪히지 않게)
 const int END_MARGIN_RIGHT = 3; // [1009] 오른쪽 끝 여유
 const int LEFT_LIMIT = POT_LEFT - END_MARGIN;          // 왼쪽 최대 목표 = 527
@@ -79,9 +79,9 @@ const int ADC_VALID_MARGIN = 40;  // 360~570 밖이면 센서 고장으로 봄 (
 const int ADC_DEADBAND = 3;       // [1010f] 목표 ± 3 안이면 "도착" → 조향 모터 멈춤 (6 → 3, 약 ±1°)
 const int MAX_STEERING_STEP = 100; // [1010f] 조향 명령 최대 (s-100 ~ s100, 1% 단위)
 const int MAX_PWM = 255;          // 뒷바퀴 PWM 최대
-const int NEAR_COUNTS = 15;       // [1010] "가깝다" 의 기준 (ADC 15칸) - 1010p 에서는 도착 해제 판정에만 씀
+const int NEAR_COUNTS = 8;       // [1010] "가깝다" 의 기준 (ADC 15칸) - 1010p 에서는 도착 해제 판정에만 씀
 // [1010p] PD 제어 (조향 모터 힘)
-const int STEER_PWM_MIN = 90;     // 모터가 움직이기 시작하는 최소 힘 (1009b 에서 95 로 50 칸/초 움직임 확인)
+const int STEER_PWM_MIN = 200;     // 모터가 움직이기 시작하는 최소 힘 (1009b 에서 95 로 50 칸/초 움직임 확인)
 const float STEER_KP = 8.0;       // 남은 1 칸마다 힘 +8  (21 칸 넘게 남으면 255)
 const float STEER_KD = 12.0;      // 목표 쪽으로 0.02초에 1 칸 다가갈 때마다 힘 −12 (지나침 방지)
 
