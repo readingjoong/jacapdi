@@ -5,6 +5,10 @@
 import json, os, time
 import tkinter as tk
 from tkinter import ttk, filedialog
+import tkinter.font as tkfont
+
+UI = float(os.environ.get("TUNE_UI_SCALE", "1.5"))   # [10/17] 글씨·슬라이더 크기 배율 (예: TUNE_UI_SCALE=2 python3 tune_gui.py)
+def fs(n): return max(1, int(round(n * UI)))
 
 DIR = os.path.expanduser("~/jacapdi-docker/tune")
 TUNE, DEFAULT, STATUS = DIR + "/tune.json", DIR + "/tune_default.json", DIR + "/status.json"
@@ -56,24 +60,24 @@ class App:
         self.vars = {}; self.pwm_vars = []; self.pending = None; self.labels = []
         top = ttk.Frame(root, padding=8); top.pack(fill="both", expand=True)
         self.status = tk.StringVar(value="제어기 상태: 대기")
-        ttk.Label(top, textvariable=self.status, font=("TkFixedFont", 11, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        ttk.Label(top, textvariable=self.status, font=("TkFixedFont", fs(11), "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
 
         box = ttk.LabelFrame(top, text="조향 / Steering (Stanley)", padding=6); box.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
         for i, (k, name, lo, hi, step, tip) in enumerate(CTRL):
             v = tk.DoubleVar(value=self.vals[k]); self.vars[k] = (v, step)
             ttk.Label(box, text=name, width=34).grid(row=2 * i, column=0, sticky="w")
             val = ttk.Label(box, width=7); val.grid(row=2 * i, column=2)
-            s = tk.Scale(box, from_=lo, to=hi, resolution=step, orient="horizontal", length=320, variable=v, showvalue=False,
+            s = tk.Scale(box, from_=lo, to=hi, resolution=step, orient="horizontal", length=fs(320), variable=v, showvalue=False,
                          command=lambda _=None, v=v, val=val, st=step: self.changed(v, val, st))
             s.grid(row=2 * i, column=1); self.fmt(v, val, step); self.labels.append((v, val, step))
-            ttk.Label(box, text=tip, foreground="#666", font=("TkDefaultFont", 8)).grid(row=2 * i + 1, column=0, columnspan=3, sticky="w")
+            ttk.Label(box, text=tip, foreground="#666", font=("TkDefaultFont", fs(8))).grid(row=2 * i + 1, column=0, columnspan=3, sticky="w")
 
         pw = ttk.LabelFrame(top, text="조향 단계별 뒷바퀴 PWM / Rear PWM per steer step", padding=6); pw.grid(row=1, column=1, sticky="nsew")
         for i in range(8):
             v = tk.IntVar(value=int(self.vals["pwm_by_step"][i])); self.pwm_vars.append(v)
             ttk.Label(pw, text="단계 Step %d%s" % (i, " (직진 straight)" if i == 0 else (" (최대 max)" if i == 7 else "")), width=24).grid(row=i, column=0, sticky="w")
             val = ttk.Label(pw, width=5); val.grid(row=i, column=2)
-            tk.Scale(pw, from_=0, to=255, resolution=5, orient="horizontal", length=260, variable=v, showvalue=False,
+            tk.Scale(pw, from_=0, to=255, resolution=5, orient="horizontal", length=fs(260), variable=v, showvalue=False,
                      command=lambda _=None, v=v, val=val: self.changed(v, val, 1)).grid(row=i, column=1)
             self.fmt(v, val, 1); self.labels.append((v, val, 1))
         self.all_pwm = tk.IntVar(value=int(self.vals["pwm_by_step"][0]))
@@ -172,4 +176,7 @@ class App:
             self.status.set("제어기 상태: 대기 (status.json 없음)")
         self.root.after(200, self.poll)
 
-root = tk.Tk(); App(root); root.mainloop()
+root = tk.Tk()
+for _n in ("TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
+    _f = tkfont.nametofont(_n); _f.configure(size=int(round(_f.cget("size") * UI)))   # [10/17] 기본 글꼴 전부 UI 배 (음수 = 픽셀 단위, 부호 유지)
+App(root); root.mainloop()

@@ -1,5 +1,5 @@
 {
- "inside_bias_m": 0.05,
+ "inside_bias_m": 0.0,
  "steer_rate": 0.0,
  "lane_guard_m": 0.0,
  "motor_balance": 2,
@@ -17,7 +17,7 @@
  "max_steer_deg": 25.0,
  "max_steering_step": 7,
  "steer_trim": 0.0,
- "path_offset_m": 0.04,
+ "path_offset_m": 0.0,
  "lane_timeout_sec": 0.6,
  "pwm_by_step": [
   255,

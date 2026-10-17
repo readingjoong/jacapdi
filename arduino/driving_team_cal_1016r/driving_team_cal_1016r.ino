@@ -65,9 +65,9 @@ const uint8_t LEFT_2 = 7;       // 왼쪽 뒷바퀴: 뒤로
 const uint8_t POT = A2;         // 조향 가변저항 신호
 
 // ---------- 조향 가변저항 보정값 (바퀴 위치 ↔ ADC 숫자) ----------
-const int POT_LEFT = 561;       // [1016] 왼쪽 끝까지 돌렸을 때 ADC (2026-10-16 손으로 3번 잼 525/535/530 중 마지막, 전엔 543)
-const int POT_CENTER = 476;     // [1016] 똑바로일 때 ADC. 손으로 4번 잼 474/450/457/467 → 평균 462 (예전 값과 같음)
-const int POT_RIGHT = 391;      // [1016] 오른쪽 끝까지 돌렸을 때 ADC (3번 잼 392/401/400 중 마지막, 전엔 391)
+const int POT_LEFT = 560;       // [1016] 왼쪽 끝까지 돌렸을 때 ADC (2026-10-16 손으로 3번 잼 525/535/530 중 마지막, 전엔 543)
+const int POT_CENTER = 478;     // [1016] 똑바로일 때 ADC. 손으로 4번 잼 474/450/457/467 → 평균 462 (예전 값과 같음)
+const int POT_RIGHT = 395;      // [1016] 오른쪽 끝까지 돌렸을 때 ADC (3번 잼 392/401/400 중 마지막, 전엔 391)
 const int END_MARGIN = 3;       // [1009] 왼쪽 끝에서 이만큼 덜 가서 멈춤 (기계 끝에 쾅 부딪히지 않게)
 const int END_MARGIN_RIGHT = 3; // [1009] 오른쪽 끝 여유
 const int LEFT_LIMIT = POT_LEFT - END_MARGIN;          // 왼쪽 최대 목표 = 527

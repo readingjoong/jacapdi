@@ -146,7 +146,7 @@ class Tunable(Node):
             # (2) 내륜차 물리 보상 (우회전 시 뒷바퀴가 코너 안쪽 실선 밟는 것 방지)
             x0 = p["front_axle_offset_m"]
             curv = 2.0 * t.a / (1.0 + (2.0 * t.a * x0 + t.b) ** 2) ** 1.5    # 곡률 (+: 좌회전, -: 우회전)
-            WHEELBASE = 0.45       # 전동차 축간거리(앞바퀴~뒷바퀴 거리 약 0.65m)
+            WHEELBASE = 0.56       # 전동차 축간거리(앞바퀴~뒷바퀴 거리 약 0.65m)
             off_tracking = 0.5 * (WHEELBASE ** 2) * curv   # 우회전이면 curv<0 이므로 shift는 왼쪽(+)으로
             shift = p["path_offset_m"] - off_tracking
             
