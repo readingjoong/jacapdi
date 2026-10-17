@@ -30,6 +30,6 @@
   255
  ],
  "i_gain": 0.04,
- "i_max_deg": 1.5,
+ "i_max_deg": 1.0,
  "i_curv_max": 0.3
 }

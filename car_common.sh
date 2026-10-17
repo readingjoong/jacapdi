@@ -21,6 +21,7 @@ port_users() {   # /dev/ttyACM0 를 잡고 있는 호스트 프로세스 (Arduin
 }
 
 send_stop() {    # 모든 송신기 끄고 s0l0r0 5번 (컨테이너 안에서)
+  rm -f "$D/tune/go_until"   # [1017] 출발 스위치도 끔
   docker exec "$C" bash -c 'pkill -INT -f "timeout -s INT"; pkill -INT -f "serial_communication_pkg/serial_sender_node"; sleep 1.5;
     for p in $(pgrep -f "serial_communication_pkg/serial_sender_node"); do kill -9 $p; done' >/dev/null 2>&1
   docker exec "$C" python3 -c "
@@ -28,6 +29,12 @@ import serial, time
 s = serial.Serial(); s.port = '/dev/ttyACM0'; s.baudrate = 115200; s.timeout = 0.1; s.dsrdtr = False; s.open()
 for _ in range(5): s.write(b's0l0r0\n'); time.sleep(0.05)
 s.close()" >/dev/null 2>&1 && say "정지 명령 s0l0r0 전송" || warn "정지 명령 전송 실패 (아두이노 연결 확인). 펌웨어가 0.3초 뒤 스스로 정지함"
+}
+
+SENDER_LOG=/tmp/pipeline/serial.log
+start_sender() { # [1017] serial_sender 를 미리 띄워 둠 (TUNE=1: 출발 스위치 tune/go_until 이 없으면 제어기가 아무것도 안 보내서 보드는 IDLE)
+  docker exec -d "$C" bash -c "mkdir -p /tmp/pipeline; source /opt/ros/humble/setup.bash; source ~/team_ws/install/setup.bash; export ROS_LOCALHOST_ONLY=1
+    exec ros2 run serial_communication_pkg serial_sender_node --ros-args -p port:=/dev/ttyACM0 -p baud_rate:=115200 -p sub_topic:=/topic_control_signal -p use_sim_time:=false > $SENDER_LOG 2>&1"
 }
 
 yolo_on() {      # YOLO 추론 켜기(true)/끄기(false). 배터리 절약용. 서비스 이름은 /enable (yolov8_node). 5초 안에 응답 없으면 실패

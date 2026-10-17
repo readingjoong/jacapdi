@@ -64,6 +64,7 @@ from decision_making_pkg.lib.lane_keeping_controller import LaneKeepingControlle
 
 TUNE = os.path.expanduser("~/jacapdi-docker/tune/tune.json")       # 슬라이더 값 (사람이 바꿈)
 STATUS = os.path.expanduser("~/jacapdi-docker/tune/status.json")   # 지금 상태 (슬라이더 창에 표시)
+GO = os.path.expanduser("~/jacapdi-docker/tune/go_until")          # [1017] 출발 스위치: 주행 끝 시각(epoch 초). car_go.sh 가 쓰고 지움
 RUN = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else ""   # 기록 폴더
 FW_FULL = 100            # 펌웨어(1010f)가 받는 조향 최대값 (s-100 ~ s100, 1% 단위)
 OLD_STEPS = 7            # 슬라이더는 예전 단계(0~7) 단위
@@ -90,6 +91,8 @@ class Tunable(Node):
         self.i_lost = 0.0                         # [I 항] 경로 없던 시간 (s)
         self.hist = []                            # 최근 1초 경로 (시각, b, c) - 멈춤 감지용
         self.boost_until = 0.0                    # 이 시각까지 멈춤 탈출 PWM 사용
+        self.go = False
+        self.zero_until = 0.0                     # [1017] 출발 스위치 꺼진 뒤 이 시각까지 정지 명령 보냄
         self.reload(force=True)
         self.create_timer(0.05, self.tick)        # 1초에 20번 명령 계산 (팀 노드와 같은 주기)
 
@@ -209,7 +212,19 @@ class Tunable(Node):
             if bal < 0: r = max(0, r + bal)
         self.prev_steer = steer
         msg = MotionCommand(); msg.steering, msg.left_speed, msg.right_speed = steer, l, r
-        self.pub.publish(msg)
+        # (5-2) [1017 출발 스위치] serial_sender 가 car_prep 때부터 켜져 있으므로 여기서 막는다.
+        #       go_until 시각 전에만 주행 명령. 꺼지면 0.5 초 동안 정지 명령, 그 뒤엔 아무것도 안 보냄 (보드는 IDLE 로 대기)
+        try:
+            go = time.time() < float(open(GO).read())
+        except (OSError, ValueError):
+            go = False
+        self.go = go
+        if go:
+            self.zero_until = time.monotonic() + 0.5
+            self.pub.publish(msg)
+        elif time.monotonic() < self.zero_until:
+            m0 = MotionCommand(); m0.steering = m0.left_speed = m0.right_speed = 0
+            self.pub.publish(m0)
 
         # (6) 0.2 초마다 슬라이더 창에 상태 알림
         self.n += 1
@@ -217,7 +232,8 @@ class Tunable(Node):
             st = {"time": time.time(), "steer": steer, "pwm": l, "valid": not stale,
                   "c": None if stale else round(self.traj.c, 3), "b": None if stale else round(self.traj.b, 3),
                   "shift": round(shift, 3), "delta_deg": None if delta is None else round(math.degrees(delta), 1),
-                  "i_deg": round(math.degrees(float(p["i_gain"]) * self.i_acc), 2)}
+                  "i_deg": round(math.degrees(float(p["i_gain"]) * self.i_acc), 2),
+                  "go": self.go}                     # [1017] car_go.sh 가 이 키로 출발 스위치 있는 제어기인지 확인
             try:
                 with open(STATUS + ".tmp", "w") as f:
                     json.dump(st, f)

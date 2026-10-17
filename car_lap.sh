@@ -6,7 +6,6 @@
 source "$(dirname "$0")/car_common.sh"
 LAP_SEC="${1:-${LAP_SEC:-75}}"
 "$D/car_prep.sh" || exit 1
-yolo_on true || die "YOLO 켜기 실패 (car_prep 이 꺼 둠). car_prep.sh 다시"   # 차선 확인하려면 켜져 있어야 함
 
 say "차선 인식 확인 (경로 valid 80% 이상이 될 때까지, 최대 30초). 차를 2차선 출발 위치에 놓으세요"
 ok=0

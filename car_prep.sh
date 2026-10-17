@@ -33,6 +33,7 @@ done
 echo "$RUN" > /tmp/car_run_dir
 
 if [ "$TUNE" = 1 ]; then
+  rm -f "$D/tune/go_until"                       # 출발 스위치 꺼진 상태로 시작
   docker exec -d "$C" bash -ic "python3 ~/jacapdi-docker/tunable_controller.py $RUN > $RUN/tunable.log 2>&1"
   cp "$D/tune/tune.json" "$RUN/tune_at_start.json"
   say "   조정형 제어기 사용 (슬라이더: python3 ~/jacapdi-docker/tune_gui.py)"
@@ -43,6 +44,9 @@ sleep 4
 FW=$(grep -o "DRIVING_TEAM[^ ]*" "$RUN/board.log" | head -1)
 ADC=$(grep -o "IDLE ADC=[0-9]*" "$RUN/board.log" | tail -1)
 [ "$FW" = "$FW_NAME" ] && say "   펌웨어 $FW, 조향 $ADC" || warn "   펌웨어가 $FW_NAME 이 아님 (보드: ${FW:-응답없음}). 업로드: ~/jacapdi-docker/car_flash.sh"
+if [ "$TUNE" = 1 ]; then   # [1017] 송신기 미리 켜 둠 -> car_go 는 출발 스위치만 켬 (바로 출발). 스위치 꺼져 있으면 보드에 아무것도 안 감
+  start_sender; say "   시리얼 송신기 대기 중 (출발 스위치 꺼짐)"
+fi
 A=${ADC#IDLE ADC=}   # 조향 가변저항 값이 정상 범위(351~601, 펌웨어 1016r 기준)인지 확인
 if [ -n "$A" ] && { [ "$A" -lt 351 ] || [ "$A" -gt 601 ]; }; then
   printf '\033[1;31m[car]    !!! 조향 가변저항 값 %s = 비정상 (정상 391~561). 출발하면 펌웨어가 바로 모터를 끔 (adc_out_of_range).\n[car]    !!! 1023 = GND 선 빠짐/신호가 5V 에 닿음, 0 = 신호선 빠짐/GND 에 닿음. 배터리·USB 끄고 가변저항 배선 확인\033[0m\n' "$A"
@@ -59,5 +63,4 @@ docker exec "$C" bash -ic 'python3 ~/jacapdi-docker/rate_probe.py 2>/dev/null | 
 say "준비 완료. 기록 폴더: $RUN"
 say "출발: ~/jacapdi-docker/car_go.sh   (기본 ${DRIVE_SEC}초, 예: car_go.sh 60)   비상정지: Ctrl+C 또는 ~/jacapdi-docker/car_stop.sh"
 
-# 준비 완료 후 사람이 출발 누를 때까지 YOLO GPU 추론 꺼두기 (배터리 보존). car_go.sh 가 출발 직전에 켠다
-yolo_on false && say "YOLO 꺼 둠 (배터리 절약, car_go 출발 때 켬. 그동안 실시간 화면은 멈춤)" || warn "YOLO 끄기 실패 (켜진 채로 둠, 주행에는 문제 없음)"
+# [1017] YOLO 끄기/켜기 뺌: car_go 누르면 바로 출발하도록 YOLO 는 계속 켜 둔다 (예전엔 배터리 절약용으로 꺼 뒀음)
