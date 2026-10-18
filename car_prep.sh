@@ -21,6 +21,13 @@ docker rm -f "$C" >/dev/null 2>&1 || true
 "$D/run.sh" true </dev/null 2>&1 | grep started || die "컨테이너 시작 실패"
 docker exec -u root "$C" bash -c 'for d in /dev/video*; do chgrp video $d; chmod 660 $d; done; chgrp dialout /dev/ttyACM0; chmod 660 /dev/ttyACM0'
 
+# [1018] 이 창에서 Ctrl+C / 창 닫기 = 파이프라인 전부 끄기 (준비 도중이어도). car_all/car_lap 처럼 다른 스크립트가 부를 땐 PREP_HOLD=0
+HOLD="${PREP_HOLD:-1}"
+CID=$(docker ps -q -f name="$C")                # 이 car_prep 이 만든 컨테이너 (나중에 다른 car_prep 이 새로 만들면 그건 안 건드림)
+shutdown_all() { trap - INT TERM HUP; echo
+  if [ "$(docker ps -q -f name="$C")" = "$CID" ]; then warn "car_prep 종료 -> 전부 끄는 중 (car_stop.sh all)"; "$D/car_stop.sh" all
+  else warn "car_prep 종료 (컨테이너가 이미 바뀌어서 아무것도 안 끔)"; fi; exit 0; }
+[ "$HOLD" = 1 ] && trap shutdown_all INT TERM HUP
 say "3/6 파이프라인 시작 (ALGO=$ALGO CONF=$CONF, $(basename "$CTRL_YAML")) - 모터는 아직 안 켬"
 T0=$(date +%s)
 docker exec -d "$C" bash -ic "CTRL_YAML=$CTRL_YAML ALGO=$ALGO CONF=$CONF bash ~/jacapdi-docker/ab_kit/start_ab.sh > /tmp/start_ab.log 2>&1"
@@ -61,6 +68,11 @@ for i in $(seq 60); do
 done
 docker exec "$C" bash -ic 'python3 ~/jacapdi-docker/rate_probe.py 2>/dev/null | tail -3' 2>/dev/null | grep -vE "job control|terminal process group"
 say "준비 완료. 기록 폴더: $RUN"
-say "출발: ~/jacapdi-docker/car_go.sh   (기본 ${DRIVE_SEC}초, 예: car_go.sh 60)   비상정지: Ctrl+C 또는 ~/jacapdi-docker/car_stop.sh"
+say "출발: (다른 창에서) ~/jacapdi-docker/car_go.sh   (기본 ${DRIVE_SEC}초, 예: car_go.sh 60)   비상정지: car_go 창에서 Ctrl+C 또는 ~/jacapdi-docker/car_stop.sh"
+if [ "$HOLD" = 1 ]; then
+  say "이 창은 열어 두세요. 여기서 Ctrl+C 또는 창 닫기 = YOLO/웹캠/제어기 전부 끄기"
+  while [ "$(docker ps -q -f name="$C")" = "$CID" ]; do sleep 5 & wait $!; done   # 컨테이너가 없어지거나 바뀌면(다른 창에서 car_prep 다시) 그냥 끝
+  exit 0
+fi
 
 # [1017] YOLO 끄기/켜기 뺌: car_go 누르면 바로 출발하도록 YOLO 는 계속 켜 둔다 (예전엔 배터리 절약용으로 꺼 뒀음)

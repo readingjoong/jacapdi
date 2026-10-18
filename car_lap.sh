@@ -5,7 +5,7 @@
 # 차는 바퀴 위치를 모른다(엔코더/GPS 없음). "한 바퀴"는 시간으로 정한다. Ctrl+C = 즉시 정지.
 source "$(dirname "$0")/car_common.sh"
 LAP_SEC="${1:-${LAP_SEC:-75}}"
-"$D/car_prep.sh" || exit 1
+PREP_HOLD=0 "$D/car_prep.sh" || exit 1
 
 say "차선 인식 확인 (경로 valid 80% 이상이 될 때까지, 최대 30초). 차를 2차선 출발 위치에 놓으세요"
 ok=0

@@ -47,7 +47,9 @@ sleep 2
 python3 "$KIT/algo/$F" --ros-args -p use_sim_time:=false \
   -p mode:=solid_follow -p online_width:=true -p hold_last_sec:=${HOLD_LAST_SEC:-1.0} \
   -p min_rows:=0.06 -p max_gap:=0.40 > "$L/line_path.log" 2>&1 & PIDS+=($!)
-ros2 run decision_making_pkg stanley_controller_node --ros-args --params-file "$CTRL" > "$L/stanley.log" 2>&1 & PIDS+=($!)
+# [1018] TUNE=1 (조정형 제어기 사용) 이면 팀 Stanley 결과는 안 쓰는 토픽으로 가므로 아예 안 띄움 (CPU/발열 절약)
+if grep -q "team_unused" "$CTRL"; then echo "팀 Stanley 안 띄움 (TUNE=1, tunable_controller 사용)" > "$L/stanley.log"
+else ros2 run decision_making_pkg stanley_controller_node --ros-args --params-file "$CTRL" > "$L/stanley.log" 2>&1 & PIDS+=($!); fi
 python3 "$KIT/run_monitor.py" "$L" > "$L/monitor.log" 2>&1 & PIDS+=($!)
 if [ "$RECORD" -ge 1 ]; then
   TOPICS="/detections /lane_trajectory /lane_detections /topic_control_signal"

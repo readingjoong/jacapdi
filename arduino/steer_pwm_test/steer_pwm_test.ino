@@ -19,7 +19,7 @@ const uint8_t STEERING_2 = 3;   // 이 핀에 PWM → 왼쪽 (ADC 증가)
 const uint8_t RIGHT_1 = 4, RIGHT_2 = 5, LEFT_1 = 6, LEFT_2 = 7;
 const uint8_t POT = A2;
 
-const int POT_LEFT = 560, POT_CENTER = 462, POT_RIGHT = 400;   // driving_team_cal_1016r 과 같은 값
+const int POT_LEFT = 560, POT_CENTER = 462, POT_RIGHT = 390;   // driving_team_cal_1016r 과 같은 값
 const int LEFT_LIMIT = POT_LEFT - 3, RIGHT_LIMIT = POT_RIGHT + 3;
 const int ADC_MIN = POT_RIGHT - 40, ADC_MAX = POT_LEFT + 40;
 const float DEG_PER_COUNT_LEFT = 0.2846, DEG_PER_COUNT_RIGHT = 0.3040;  // vehicle.yaml (10/16 회전 원). 참고용 대략값
@@ -37,6 +37,7 @@ void drive(int dir, int pwm) {   // dir +1 왼쪽, -1 오른쪽
 }
 bool unsafe(int adc, int dir) {
   if (adc < ADC_MIN || adc > ADC_MAX) { Serial.print(F("# 값이 범위 밖 (배선?) ADC=")); Serial.println(adc); return true; }
+  
   if (dir > 0 && adc >= LEFT_LIMIT) { Serial.println(F("# 왼쪽 끝(527) 도착 → 모터 끔")); return true; }
   if (dir < 0 && adc <= RIGHT_LIMIT) { Serial.println(F("# 오른쪽 끝(403) 도착 → 모터 끔")); return true; }
   return false;
