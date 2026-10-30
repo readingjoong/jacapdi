@@ -10,5 +10,6 @@
  "i_max_deg": 1.0,
  "i_curv_max": 0.3,
  "lane_timeout_sec": 0.6,
- "pwm": 255
+ "pwm": 255,
+ "lane_change_sec": 2.0
 }

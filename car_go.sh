@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 출발 (car_prep.sh 다음). 사용: ~/jacapdi-docker/car_go.sh [초]   Ctrl+C = 즉시 정지
+# 출발 (car_prep.sh 다음). 사용: ~/jacapdi-docker/car_go.sh [초]
+# 주행 중 키: 1 / 2 = 그 차선으로 변경, q / 스페이스 / Ctrl+C = 정지
 # 출발 스위치 tune/go_until 에 끝 시각을 쓰면 제어기가 0.05초 안에 명령을 내보낸다 (이 창이 죽어도 그 시각에 스스로 멈춤).
 # 주행 중 10 Hz 기록: <기록폴더>/drive_HHMMSS/{frames/*.png, frames.csv}  (LOG=0 이면 끔, RAW=1 이면 원본 PNG 도)
 source "$(dirname "$0")/car.sh"
@@ -33,7 +34,7 @@ if [ "${LOG:-1}" = 1 ] && [ -n "$RUN" ]; then
   cp "$D/tune/tune.json" "$OUT/tune_at_start.json"
   say "10 Hz 기록 시작: $OUT"
 fi
-say "출발 $GO_T: ${SEC}초 (슬라이더 값: $(python3 -c "import json;d=json.load(open('$D/tune/tune.json'));print('Stanley %.2f, 방향 %.2f, PWM %s'%(d['stanley_gain'],d['heading_gain'],d['pwm_by_step']))"))  Ctrl+C = 정지"
-sleep "$SEC" &
-wait $!
+say "출발 $GO_T: ${SEC}초 (슬라이더 값: $(python3 -c "import json;d=json.load(open('$D/tune/tune.json'));print('Stanley %.2f, 방향 %.2f, PWM %d'%(d['stanley_gain'],d['heading_gain'],d['pwm']))"))"
+say "키: 1 / 2 = 차선 변경, q / 스페이스 / Ctrl+C = 정지"
+wait_keys "$SEC"
 stop_now

@@ -4,6 +4,7 @@
 #   ~/jacapdi-docker/car.sh stop [all]   비상 정지.  all = 파이프라인까지 끄고 요약
 #   ~/jacapdi-docker/car.sh all [초]     car_prep → 엔터 → car_go
 #   ~/jacapdi-docker/car.sh lap [초]     car_prep → 차선 인식 확인 → 5초 카운트다운 → car_go (기본 75초)
+#   ~/jacapdi-docker/car.sh lane 1|2     달릴 차선 바꾸기 (주행 중에도, lane_change_sec 동안 부드럽게 옮김)
 #   ~/jacapdi-docker/car.sh flash        아두이노에 펌웨어 업로드 (필요할 때만)
 #   ~/jacapdi-docker/car.sh shell [명령] 컨테이너 셸 (명령을 주면 그것만 실행)
 CONF="${CONF:-0.3}"                                           # YOLO 확신도 기준 (경로 노드가 실선/점선을 0.30 으로 다시 거름)
@@ -57,6 +58,22 @@ import serial, time
 s = serial.Serial(); s.port = '/dev/ttyACM0'; s.baudrate = 115200; s.timeout = 0.1; s.dsrdtr = False; s.open()
 for _ in range(5): s.write(b's0l0r0\n'); time.sleep(0.05)
 s.close()" >/dev/null 2>&1 && say "정지 명령 s0l0r0 전송" || warn "정지 명령 전송 실패 (아두이노 연결 확인). 펌웨어가 0.3초 뒤 스스로 정지함"
+}
+
+set_lane() {     # 달릴 차선 1|2 (경로 노드가 다음 프레임에 읽고 lane_change_sec 동안 옮김)
+  echo "$1" > "$D/tune/lane.tmp" && mv "$D/tune/lane.tmp" "$D/tune/lane"; say "차선 -> $1차선"
+}
+
+wait_keys() {    # $1 초 동안 키 기다리기: 1/2 = 차선 변경, q/스페이스 = 그만 (돌아옴). 터미널이 아니면 그냥 기다림
+  local end=$(( $(date +%s%3N) + ${1%.*} * 1000 )) left k
+  if [ ! -t 0 ]; then sleep "$1" & wait $!; return; fi
+  while left=$(( end - $(date +%s%3N) )); [ $left -gt 0 ]; do
+    IFS= read -rsn1 -t "$((left / 1000)).$(printf %03d $((left % 1000)))" k || continue
+    case "$k" in
+      1|2) set_lane "$k" ;;
+      q|" ") return ;;
+    esac
+  done
 }
 
 start_sender() { # 시리얼 송신기를 미리 띄워 둠. 출발 스위치(tune/go_until)가 꺼져 있으면 제어기가 아무것도 안 보내서 보드는 IDLE
@@ -121,7 +138,8 @@ case "$1" in
   all)   PREP_HOLD=0 "$D/car_prep.sh" || exit 1; read -r -p $'\n차를 출발 위치에 놓고 엔터 = 출발, Ctrl+C = 취소 ' _
          exec "$D/car_go.sh" "${2:-$DRIVE_SEC}" ;;
   lap)   lap "$2" ;;
+  lane)  [ "$2" = 1 ] || [ "$2" = 2 ] || die "사용: car.sh lane 1|2"; set_lane "$2" ;;
   flash) flash ;;
   shell) shift; shell "$@" ;;
-  *)     sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *)     sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

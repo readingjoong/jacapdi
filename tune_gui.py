@@ -9,7 +9,7 @@ import tkinter.font as tkfont
 
 UI = float(os.environ.get("TUNE_UI_SCALE", "1.5"))
 DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tune")
-TUNE, DEFAULT, STATUS = DIR + "/tune.json", DIR + "/tune_default.json", DIR + "/status.json"
+TUNE, DEFAULT, STATUS, LANE = DIR + "/tune.json", DIR + "/tune_default.json", DIR + "/status.json", DIR + "/lane"
 
 # (키, 이름, 최소, 최대, 간격, 설명)
 SLIDERS = [
@@ -25,6 +25,7 @@ SLIDERS = [
     ("i_curv_max", "I 직선 기준 (1/m)", 0.0, 1.0, 0.05, "곡률이 이보다 작을 때만 I 항을 쌓음"),
     ("lane_timeout_sec", "경로 끊김 허용 (s)", 0.1, 1.0, 0.05, "이 시간 넘게 경로가 없으면 정지"),
     ("pwm", "뒷바퀴 PWM", 0, 255, 5, "뒷바퀴 모터 힘 (0~255)"),
+    ("lane_change_sec", "차선 변경 시간 (s)", 0.5, 4.0, 0.1, "차선을 바꿀 때 옆으로 0.85 m 옮기는 데 걸리는 시간. 짧으면 급하게 꺾음"),
 ]
 
 
@@ -49,7 +50,13 @@ class App:
                      command=lambda _=None, k=k: self.changed(k)).grid(row=2 * i + 1, column=1)
             lab.grid(row=2 * i + 1, column=2); self.fmt(k)
             ttk.Label(top, text=tip, foreground="#666", font=("TkDefaultFont", int(8 * UI))).grid(row=2 * i + 2, column=0, columnspan=3, sticky="w")
-        btn = ttk.Frame(top); btn.grid(row=2 * len(SLIDERS) + 1, column=0, columnspan=3, pady=(8, 0), sticky="w")
+        lane = ttk.Frame(top); lane.grid(row=2 * len(SLIDERS) + 1, column=0, columnspan=3, pady=(8, 0), sticky="w")
+        ttk.Label(lane, text="차선 (주행 중 바로 바뀜, 키 1 / 2):").pack(side="left")
+        for n in (1, 2):
+            ttk.Button(lane, text="%d차선" % n, command=lambda n=n: self.set_lane(n)).pack(side="left", padx=4)
+        root.bind("1", lambda e: self.set_lane(1)); root.bind("2", lambda e: self.set_lane(2))   # 이 창에서 1 / 2 키
+        self.lane = tk.StringVar(); ttk.Label(lane, textvariable=self.lane, font=("TkDefaultFont", int(10 * UI), "bold")).pack(side="left", padx=8)
+        btn = ttk.Frame(top); btn.grid(row=2 * len(SLIDERS) + 2, column=0, columnspan=3, pady=(8, 0), sticky="w")
         ttk.Button(btn, text="기본값", command=lambda: self.apply(load(DEFAULT))).pack(side="left")
         ttk.Button(btn, text="프리셋 저장", command=self.save_preset).pack(side="left", padx=6)
         ttk.Button(btn, text="프리셋 열기", command=self.open_preset).pack(side="left")
@@ -82,6 +89,10 @@ class App:
     def apply(self, d):
         self.set_all(d); self.write()
 
+    def set_lane(self, n):
+        with open(LANE + ".tmp", "w") as f: f.write("%d\n" % n)
+        os.replace(LANE + ".tmp", LANE)
+
     def save_preset(self):
         p = filedialog.asksaveasfilename(initialdir=DIR, initialfile="preset_%s.json" % time.strftime("%m%d_%H%M"), defaultextension=".json")
         if p:
@@ -100,6 +111,10 @@ class App:
                 self.saved.set("파일에서 다시 읽음 %s" % time.strftime("%H:%M:%S"))
         except (OSError, ValueError):
             pass
+        try:
+            with open(LANE) as f: self.lane.set("지금: %s차선" % f.read().strip())
+        except OSError:
+            self.lane.set("지금: 2차선")
         try:
             s = load(STATUS)
             if time.time() - s["time"] > 2:

@@ -9,5 +9,6 @@ ros/log/
 # 실행 중 생기는 파일: 제어기 상태, 출발 스위치, 저장 도중 임시 파일
 tune/status.json
 tune/go_until
+tune/lane
 *.tmp
 __pycache__/

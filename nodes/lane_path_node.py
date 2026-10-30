@@ -4,9 +4,12 @@
                                           └→ /lane_detections (화면용 차로 띠, path_viewer)
 
 좌표는 nodes/ipm.py (x 앞 m, y 왼쪽 m). c > 0 = 차로 중앙이 차보다 왼쪽.
-트랙: 항상 2차선. 왼쪽 경계 = 점선, 오른쪽 경계 = 실선, 차로 폭 0.85 m.
+트랙: 2차로, 차로 폭 0.85 m. 2차선 = 왼쪽 점선 + 오른쪽 실선, 1차선 = 왼쪽 실선 + 오른쪽 점선.
+달릴 차선 = tune/lane 파일 (1 또는 2, 없으면 2). 주행 중에 바꾸면 (car.sh lane 1/2, tune_gui 버튼)
+지금 차선 경로에 옆 이동을 0 → ±0.85 m 까지 lane_change_sec(tune.json, 기본 2 초) 동안 S자로 더하고,
+다 옮기면 새 차선 규칙으로 바꾼다. 도중에 되돌리면 그 자리에서 다시 돌아온다.
 
-한 프레임
+한 프레임 (아래 설명은 2차선 기준. 1차선은 좌우를 뒤집어서 같은 계산)
  1. 사진이 0.3 초 넘게 늦었거나 마스크가 없으면 실패 (6)
  2. 실선/점선 마스크를 칠한다. 확신도 0.30 미만, 차 진행 방향과 60° 넘게 누운 실선(횡단보도·정지선 앞 굵은 선)은 버린다
  3. find_path
@@ -22,7 +25,9 @@
  6. 실패하면 직전 경로를 1 초까지 유지, 그 뒤 valid=false (제어기가 차를 세움)
 """
 import copy
+import json
 import math
+import os
 import time
 
 import cv2
@@ -58,6 +63,10 @@ CROSS_CLASSES = ("crosswalk_marking", "stop_line")
 CROSS_MIN_SCORE = 0.5
 CROSS_RECENT_SEC = 0.5
 CROSS_HOLD_MAX_SEC = 1.5
+TUNE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
+LANE_FILE = TUNE_DIR + "/lane"            # 달릴 차선 1 또는 2 (car.sh lane, tune_gui 가 씀)
+TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec 만 읽음
+LANE_CHANGE_SEC = 2.0                     # tune.json 에 없을 때
 
 
 def run_edges(mask, gap=3):
@@ -110,6 +119,57 @@ def nearest(ys, target):
     return min(ys, key=lambda v: abs(v - target))
 
 
+def read_file(path, mtime, cast):
+    """파일이 바뀌었으면 (mtime, 값), 그대로이거나 못 읽으면 (mtime, None)."""
+    try:
+        mt = os.path.getmtime(path)
+        return (mt, None) if mt == mtime else (mt, cast(open(path).read()))
+    except (OSError, ValueError):
+        return mtime, None
+
+
+class Lane:
+    """달릴 차선과 차선 변경 중 옆 이동."""
+
+    def __init__(self, log):
+        self.log = log
+        self.rules = 2                            # 지금 경계를 고르는 규칙 (1 또는 2)
+        self.want = 2                             # 요청된 차선
+        self.change = None                        # 변경 중: (시작 시각, 시작 이동, 목표 이동, 목표 차선)
+        self.lane_file, self.tune_file = LANE_FILE, TUNE_FILE
+        self.lane_mt = self.tune_mt = None
+        self.sec = LANE_CHANGE_SEC
+        self.update(time.time())
+        self.rules = self.want; self.change = None   # 시작할 때는 옮기지 않고 바로 그 차선
+
+    def offset_at(self, now):
+        if self.change is None:
+            return 0.0
+        t0, o0, o1, _ = self.change
+        s = min(max((now - t0) / max(self.sec, 1e-3), 0.0), 1.0)
+        return o0 + (o1 - o0) * s * s * (3 - 2 * s)
+
+    def update(self, now):
+        """파일을 확인하고 지금 경로에 더할 옆 이동(m, + 왼쪽)을 돌려준다."""
+        self.lane_mt, v = read_file(self.lane_file, self.lane_mt, lambda s: int(s.strip()))
+        if v in (1, 2):
+            self.want = v
+        self.tune_mt, v = read_file(self.tune_file, self.tune_mt, lambda s: float(json.loads(s).get("lane_change_sec", LANE_CHANGE_SEC)))
+        if v is not None:
+            self.sec = v
+        goal = self.change[3] if self.change else self.rules
+        if self.want != goal:                     # 새 요청 또는 변경 도중 되돌리기
+            o1 = 0.0 if self.want == self.rules else (LANE_WIDTH_M if self.want == 1 else -LANE_WIDTH_M)
+            self.change = (now, self.offset_at(now), o1, self.want)
+            self.log("lane change -> %d (%.1fs)" % (self.want, self.sec))
+        if self.change and now - self.change[0] >= self.sec:
+            if self.change[3] != self.rules:      # 다 옮겼으면 새 차선 규칙으로
+                self.rules = self.change[3]
+                self.log("lane %d" % self.rules)
+            self.change = None
+        return self.offset_at(now)
+
+
 class LanePathNode(Node):
     def __init__(self):
         super().__init__("line_path_node")
@@ -119,6 +179,7 @@ class LanePathNode(Node):
         self.traj_pub = self.create_publisher(LaneTrajectory, "/lane_trajectory", qos)
         self.band_pub = self.create_publisher(DetectionArray, "/lane_detections", qos)
         self.ipm = Ipm(); self.rows = None; self.row_idx = None
+        self.lane = Lane(self.get_logger().info); self.off = 0.0
         self.last_traj = None; self.last_band = None; self.last_ok_time = 0.0   # 직전 정상 경로 (실패 시 유지용)
         self.ref = None; self.ref_band = None; self.ref_time = 0.0              # 믿은 경로
         self.outlier_since = None; self.search_start = None
@@ -147,6 +208,7 @@ class LanePathNode(Node):
         if any(d.class_name in CROSS_CLASSES and d.score >= CROSS_MIN_SCORE for d in msg.detections):
             self.cross_seen = time.time()
         self.stats["frames"] += 1
+        self.off = self.lane.update(time.time())
         age = (self.get_clock().now() - Time.from_msg(msg.header.stamp)).nanoseconds * 1e-9
         shape = next(((d.mask.height, d.mask.width) for d in msg.detections if d.mask.height > 0), None)
         if age > MAX_IMAGE_AGE_SEC or shape is None:
@@ -169,7 +231,7 @@ class LanePathNode(Node):
             self.last_reason = "no_line"
             return self.fail(msg.header)
 
-        traj, band, reason = self.find_path(md, ms, msg.header)
+        traj, band, reason = self.find_path(md, ms, msg.header, self.lane.rules == 1)
         traj, band, reason = self.cross_hold(traj, band, reason, msg.header)
         traj, band, reason = self.outlier_hold(traj, band, reason, msg.header)
         self.last_reason = reason
@@ -179,8 +241,20 @@ class LanePathNode(Node):
             self.stats["both" if reason.startswith("solid+dashed") else "one_side"] += 1
         self.stats["ok"] += 1
         self.last_traj, self.last_band, self.last_ok_time = traj, band, time.time()
+        self.publish(traj, band, shape)
+
+    def publish(self, traj, band, shape):
+        """차선 변경 중이면 지금 옆 이동을 더해서 내보낸다 (계산·유지 판단은 모두 이동 없는 차선 기준)."""
+        if self.off:
+            traj = copy.deepcopy(traj); traj.c += self.off
+            band = self.band_of(traj) if band is not None else None
         self.traj_pub.publish(traj)
-        self.publish_band(msg.header, band, shape)
+        self.publish_band(traj.header, band, shape)
+
+    def band_of(self, t):
+        """경로 ± 0.425 m 띠의 사진 좌표 (화면용)."""
+        bx = np.linspace(t.x_min_m, t.x_max_m, 12); by = np.polyval([t.a, t.b, t.c], bx)
+        return [(float(a), float(b)) for a, b in self.ipm.to_px(np.r_[bx, bx[::-1]], np.r_[by + HALF, by[::-1] - HALF])]
 
     def is_transverse(self, poly):
         """실선 테두리 점들이 가장 길게 퍼진 방향(주성분)이 앞쪽과 TRANSVERSE_DEG 넘게 벌어지면 가로선."""
@@ -192,11 +266,12 @@ class LanePathNode(Node):
         dx, dy = np.linalg.svd(P - P.mean(axis=0), full_matrices=False)[2][0]
         return math.degrees(math.atan2(abs(dy), abs(dx))) > TRANSVERSE_DEG
 
-    def find_path(self, md, ms, header):
+    def find_path(self, md, ms, header, mirror=False):
+        """mirror (1차선): 실선은 구간의 오른쪽 끝, 점선은 왼쪽 끝을 쓰고 옆 좌표 부호를 바꿔 2차선과 같은 계산 → 결과를 다시 뒤집음."""
         yl = self.ipm.yl
         n = len(self.rows)
-        sr, sc = np.nonzero(run_edges(ms[self.row_idx] > 0)[0])   # 실선 구간의 왼쪽 끝 (줄 번호, 열)
-        dr, dc = np.nonzero(run_edges(md[self.row_idx] > 0)[1])   # 점선 구간의 오른쪽 끝
+        sr, sc = np.nonzero(run_edges(ms[self.row_idx] > 0)[int(mirror)])       # 실선의 안쪽 끝 (줄 번호, 열)
+        dr, dc = np.nonzero(run_edges(md[self.row_idx] > 0)[1 - int(mirror)])   # 점선의 안쪽 끝
         sk, dk = np.searchsorted(sr, np.arange(n + 1)), np.searchsorted(dr, np.arange(n + 1))   # 줄마다 시작 위치
         R, D = [], []                            # 실선 안쪽 끝 (x, y), 점선 안쪽 끝 (x, y)
         prev_r = prev_d = None
@@ -204,7 +279,7 @@ class LanePathNode(Node):
             yr = yd = None
             starts = sc[sk[i]:sk[i + 1]]
             if starts.size:                      # 오른쪽 경계 = 실선 구간의 왼쪽 끝
-                ys = yl[row, starts]
+                ys = -yl[row, starts] if mirror else yl[row, starts]
                 if prev_r is None:               # 처음: 차 오른쪽(-1.2 ~ +0.2 m) 중 차로 폭 절반에 가장 가까운 것
                     cand = [v for v in ys if -1.2 < v < 0.2]
                     yr = nearest(cand, -HALF) if cand else None
@@ -212,7 +287,7 @@ class LanePathNode(Node):
                     v = nearest(ys, prev_r); yr = v if abs(v - prev_r) < 0.15 else None
             ends = dc[dk[i]:dk[i + 1]]
             if ends.size:                        # 왼쪽 경계 = 점선 구간의 오른쪽 끝
-                ys = yl[row, ends]
+                ys = -yl[row, ends] if mirror else yl[row, ends]
                 if yr is not None and any(v < yr - 0.2 for v in ys):
                     yr = None                    # 점선보다 왼쪽의 실선 = 1차선 바깥 실선
                 if yr is not None:
@@ -232,9 +307,9 @@ class LanePathNode(Node):
                 return None, None, "search_timeout(%.1fs)" % (now - self.search_start)
             self.stats["search"] += 1
             t = LaneTrajectory(); t.header = header; t.valid = True
-            t.a = t.b = 0.0; t.c = -float(SEARCH_OFFSET_M)
+            t.a = t.b = 0.0; t.c = float(SEARCH_OFFSET_M) if mirror else -float(SEARCH_OFFSET_M)
             t.x_min_m, t.x_max_m, t.fit_error_m, t.num_points = 0.0, 0.5, 0.0, 0
-            return t, None, "search_right(%.1fs)" % (now - self.search_start)
+            return t, None, "search_%s(%.1fs)" % ("left" if mirror else "right", now - self.search_start)
         self.search_start = None
 
         fs, fd = fit_line(R), fit_line(D)
@@ -269,6 +344,8 @@ class LanePathNode(Node):
         err = float(np.sqrt(np.mean((np.polyval(c, sel[:, 0]) - sel[:, 1]) ** 2)))
         if not np.all(np.isfinite(c)) or err > 0.15:
             return None, None, "bad_fit(%.2f)" % err
+        if mirror:
+            c = -c
 
         t = LaneTrajectory(); t.header = header; t.valid = True
         t.a, t.b, t.c = float(c[0]), float(c[1]), float(c[2])
@@ -327,11 +404,12 @@ class LanePathNode(Node):
         held = self.last_traj is not None and time.time() - self.last_ok_time <= HOLD_LAST_SEC
         if held:
             self.stats["held"] += 1
-            t = self.last_traj; t.header = header
+            self.last_traj.header = header
+            self.publish(self.last_traj, self.last_band, None)
         else:
             t = LaneTrajectory(); t.header = header; t.valid = False
-        self.traj_pub.publish(t)
-        self.publish_band(header, self.last_band if held else None, None)
+            self.traj_pub.publish(t)
+            self.publish_band(header, None, None)
 
     def publish_band(self, header, band, shape):
         out = DetectionArray(); out.header = header
@@ -345,10 +423,10 @@ class LanePathNode(Node):
     def log_stats(self):
         s = self.stats   # car_prep.sh / summarize_run.py 가 "frames=" 로 이 줄을 찾는다
         self.get_logger().info("frames=%d ok=%d (both %d, one_side %d, search %d) held=%d transverse_dropped=%d "
-                               "outlier_held=%d outlier_accepted=%d far_only_held=%d cross_held=%d dash_joined=%d last=%s"
+                               "outlier_held=%d outlier_accepted=%d far_only_held=%d cross_held=%d dash_joined=%d lane=%d last=%s"
                                % (s["frames"], s["ok"], s["both"], s["one_side"], s["search"], s["held"],
                                   s["transverse_dropped"], s["outlier_held"], s["outlier_accepted"], s["far_only_held"],
-                                  s["cross_held"], s["dash_joined"], self.last_reason))
+                                  s["cross_held"], s["dash_joined"], self.lane.rules, self.last_reason))
 
 
 def main():
@@ -358,6 +436,9 @@ def main():
         rclpy.spin(n)
     except KeyboardInterrupt:
         pass
+    except Exception:
+        if rclpy.ok():                            # 주행 중 오류는 그대로, 끄는 중(Ctrl+C 로 ROS 가 먼저 닫힘)에 난 것은 무시
+            raise
     finally:
         n.destroy_node(); rclpy.try_shutdown()
 

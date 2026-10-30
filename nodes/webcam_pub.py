@@ -54,8 +54,13 @@ class WebcamPub(Node):
 
 def main():
     rclpy.init(); n = WebcamPub()
-    try: rclpy.spin(n)
-    except KeyboardInterrupt: pass
+    try:
+        rclpy.spin(n)
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        if rclpy.ok():                            # 주행 중 오류는 그대로, 끄는 중(Ctrl+C 로 ROS 가 먼저 닫힘)에 난 것은 무시
+            raise
     finally: n.cap.release(); n.destroy_node(); rclpy.try_shutdown()
 
 
