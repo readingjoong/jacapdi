@@ -1,0 +1,9 @@
+std_msgs/Header header
+bool valid
+float64 a
+float64 b
+float64 c
+float64 x_min_m
+float64 x_max_m
+float64 fit_error_m
+int32 num_points

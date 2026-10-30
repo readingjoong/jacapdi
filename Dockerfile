@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential ripgrep v4l-utils mesa-utils sudo less nano \
     && rm -rf /var/lib/apt/lists/*
 
-# Same user name/uid as the host so /home/sean/team_ws keeps the pyc loader path depth.
+# Same user name/uid as the host so /home/sean/jacapdi-docker is mounted at the same path.
 RUN groupadd -g ${USER_GID} ${USERNAME} \
     && useradd -m -u ${USER_UID} -g ${USER_GID} -s /bin/bash ${USERNAME} \
     && usermod -aG video,dialout,plugdev ${USERNAME} \
@@ -35,8 +35,7 @@ RUN /usr/bin/python3 -m venv --system-site-packages /home/${USERNAME}/.venvs/jac
 
 RUN rosdep update --rosdistro humble \
     && echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc \
-    && echo '[ -f ~/team_ws/install/setup.bash ] && source ~/team_ws/install/setup.bash' >> ~/.bashrc \
-    && echo 'export ROS_LOCALHOST_ONLY=1' >> ~/.bashrc
+    && echo '[ -f ~/jacapdi-docker/pipeline.sh ] && source ~/jacapdi-docker/pipeline.sh env' >> ~/.bashrc
 
 ENV NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=all
 CMD ["bash"]

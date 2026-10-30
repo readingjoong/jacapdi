@@ -1,27 +1,13 @@
-# 주행할 때 쓰는 코드·스크립트·설정만 git 에 올린다. 큰 기록·사진·백업 사본은 뺌.
-
-# 주행 기록 (사진·로그, 수십 GB)
+# 주행 기록 (car_prep.sh 가 만듦, 수 GB)
 ab_runs/
-ghost_runs/
-
-# 사진·동영상 (최고 주행 폴더의 frames/, mp4 포함)
-frames/
-*.mp4
-*.jpg
-*.png
-
-# 파이썬 캐시, 빌드 로그
-__pycache__/
-*.pyc
-build.log
-
-# 손으로 만든 백업 사본 (git 이 대신함)
-*.bak_*
-*.ghost_*
-*.orig
-*.prev
-tune/*.bak_*
-
-# 제어기가 0.2초마다 덮어쓰는 상태 파일
+# 예전 코드·기록·백업 (git 밖에 보관)
+archive/
+# 메시지 패키지 빌드 결과 (컨테이너를 처음 띄울 때 만들어짐)
+ros/build/
+ros/install/
+ros/log/
+# 실행 중 생기는 파일: 제어기 상태, 출발 스위치, 저장 도중 임시 파일
 tune/status.json
 tune/go_until
+*.tmp
+__pycache__/

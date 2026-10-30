@@ -1,0 +1,145 @@
+# -*- coding: utf-8 -*-
+"""
+조정형 Stanley 제어기:  /lane_trajectory (y = a·x² + b·x + c)  →  /topic_control_signal (조향 -100~100, 왼쪽/오른쪽 PWM)
+
+   δ = heading_gain·atan(y'(x0)) + atan(stanley_gain·y(x0) / (vehicle_speed_mps + softening_speed_mps))
+       + curvature_gain·κ(x0) + i_gain·∫y(x0)dt                                   (x0 = front_axle_offset_m)
+   조향 = -100 · δ / max_steer_deg   (펌웨어: + 오른쪽. 경로 각도는 + 왼쪽이라 부호가 반대)
+
+   - 내륜차 보상: 경로를 0.5·축간거리²·κ 만큼 커브 바깥으로 옮겨서 계산 (뒷바퀴가 안쪽 선을 밟지 않게)
+   - I 항: 직선(|κ| < i_curv_max)이고 끝까지 꺾지 않았을 때만 쌓고 ±i_max_deg 에서 자름. 경로를 0.5 초 넘게 잃으면 0
+   - 경로가 lane_timeout_sec 넘게 없으면 정지 명령
+
+tune/tune.json (tune_gui.py 가 저장) 이 바뀌면 다음 주기(0.05 초)에 반영한다.
+tune/go_until (car_go.sh 가 쓰는 주행 끝 시각) 전에만 명령을 보낸다. 꺼지면 0.5 초 동안 정지 명령, 그 뒤엔 아무것도 안 보냄.
+tune/status.json 에 0.2 초마다 상태를 쓴다 (tune_gui.py 표시, car_go.sh 가 "go" 키로 제어기 확인).
+사용: python3 nodes/tunable_controller.py [기록폴더]   (pipeline.sh 가 띄움. 기록폴더/tune_changes.log 에 설정 변경 기록)
+"""
+import json
+import math
+import os
+import sys
+import time
+
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from interfaces_pkg.msg import LaneTrajectory, MotionCommand
+
+D = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
+TUNE, STATUS, GO = D + "/tune.json", D + "/status.json", D + "/go_until"
+STEER_MAX = 100          # 펌웨어 조향 명령 범위 ±100 (최대 조향의 1% 단위)
+WHEELBASE = 0.56         # 축간거리 m (앞축 -0.23, 뒷축 -0.79 실측)
+DT = 0.05                # 명령 주기 s
+
+
+class Tunable(Node):
+    def __init__(self, run=""):
+        super().__init__("tunable_controller")
+        q = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST,
+                       durability=DurabilityPolicy.VOLATILE, depth=1)
+        self.pub = self.create_publisher(MotionCommand, "/topic_control_signal", q)
+        self.create_subscription(LaneTrajectory, "/lane_trajectory", self.on_traj, q)
+        self.run = run
+        self.p = None; self.mtime = 0.0
+        self.traj = None; self.traj_t = None      # 마지막 정상 경로와 받은 시각
+        self.prev_steer = 0
+        self.i_acc = 0.0                          # 옆오차 적분 (m·s)
+        self.i_lost = 0.0                         # 경로 없던 시간 (s)
+        self.zero_until = 0.0                     # 출발 스위치가 꺼진 뒤 이 시각까지 정지 명령
+        self.n = 0
+        self.reload(force=True)
+        self.create_timer(DT, self.tick)
+
+    def reload(self, force=False):
+        try:
+            mt = os.path.getmtime(TUNE)
+            if not force and mt == self.mtime:
+                return
+            p = json.load(open(TUNE))
+        except (OSError, ValueError):
+            return                                # 슬라이더 창이 쓰는 도중이면 다음 주기에
+        self.mtime = mt; self.p = p
+        self.get_logger().info("tune loaded: %s" % json.dumps(p, ensure_ascii=False))
+        if self.run:
+            with open(os.path.join(self.run, "tune_changes.log"), "a") as f:
+                f.write("%s %s\n" % (time.strftime("%H:%M:%S"), json.dumps(p, ensure_ascii=False)))
+
+    def on_traj(self, m):
+        self.traj, self.traj_t = (m, time.monotonic()) if m.valid else (None, None)
+
+    def steer(self, p, t):
+        """정상 경로 t → (조향 -100~100, 조향각 rad, 내륜차 보상으로 옮긴 거리 m)."""
+        x = float(p["front_axle_offset_m"])
+        a, b = float(t.a), float(t.b)
+        shift = -0.5 * WHEELBASE ** 2 * (2.0 * a / (1.0 + (2.0 * a * x + b) ** 2) ** 1.5)
+        c = float(t.c + shift)
+        dy = 2.0 * a * x + b
+        cte = a * x * x + b * x + c                                   # x0 에서 경로가 차보다 왼쪽에 있는 거리
+        curvature = 2.0 * a / np.power(1.0 + dy * dy, 1.5)
+        delta = float(float(p["heading_gain"]) * np.arctan(dy)
+                      + np.arctan(float(p["stanley_gain"]) * cte / (abs(float(p["vehicle_speed_mps"])) + float(p["softening_speed_mps"])))
+                      + float(p["curvature_gain"]) * curvature)
+        ki = float(p["i_gain"]); imax = math.radians(float(p["i_max_deg"]))
+        self.i_lost = 0.0
+        if ki > 0:
+            if abs(curvature) < p["i_curv_max"] and abs(self.prev_steer) < STEER_MAX - 1:
+                self.i_acc += cte * DT
+            self.i_acc = float(np.clip(self.i_acc, -imax / ki, imax / ki))
+            delta += ki * self.i_acc
+        else:
+            self.i_acc = 0.0
+        norm = float(np.clip(delta / max(math.radians(p["max_steer_deg"]), 1e-6), -1.0, 1.0))
+        return int(round(-norm * STEER_MAX)), delta, shift
+
+    def tick(self):
+        self.reload()
+        p = self.p
+        stale = self.traj is None or time.monotonic() - self.traj_t > p["lane_timeout_sec"]
+        if stale:
+            self.i_lost += DT
+            if self.i_lost > 0.5:
+                self.i_acc = 0.0
+            steer, pwm, delta, shift = 0, 0, None, 0.0
+        else:
+            steer, delta, shift = self.steer(p, self.traj)
+            pwm = int(np.clip(round(p["pwm"]), 0, 255))
+        self.prev_steer = steer
+        try:
+            go = time.time() < float(open(GO).read())
+        except (OSError, ValueError):
+            go = False
+        if go:
+            self.zero_until = time.monotonic() + 0.5
+            m = MotionCommand(); m.steering, m.left_speed, m.right_speed = steer, pwm, pwm
+            self.pub.publish(m)
+        elif time.monotonic() < self.zero_until:
+            self.pub.publish(MotionCommand())     # 기본값 0, 0, 0 = 정지
+        self.n += 1
+        if self.n % 4 == 0:
+            st = {"time": time.time(), "steer": steer, "pwm": pwm, "valid": not stale,
+                  "c": None if stale else round(self.traj.c, 3), "b": None if stale else round(self.traj.b, 3),
+                  "shift": round(shift, 3), "delta_deg": None if delta is None else round(math.degrees(delta), 1),
+                  "i_deg": round(math.degrees(float(p["i_gain"]) * self.i_acc), 2), "go": go}
+            try:
+                with open(STATUS + ".tmp", "w") as f:
+                    json.dump(st, f)
+                os.replace(STATUS + ".tmp", STATUS)
+            except OSError:
+                pass
+
+
+def main():
+    rclpy.init()
+    n = Tunable(sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "")
+    try:
+        rclpy.spin(n)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        n.destroy_node(); rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()

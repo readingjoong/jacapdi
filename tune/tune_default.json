@@ -6,26 +6,9 @@
  "softening_speed_mps": 0.15,
  "front_axle_offset_m": 0.0,
  "max_steer_deg": 20.0,
- "max_steering_step": 7,
- "steering_sign": -1.0,
- "steer_trim": 0,
- "path_offset_m": 0.0,
+ "i_gain": 0.0,
+ "i_max_deg": 3.0,
+ "i_curv_max": 0.3,
  "lane_timeout_sec": 0.3,
- "pwm_by_step": [
-  240,
-  240,
-  240,
-  240,
-  240,
-  240,
-  240,
-  240
- ],
- "inside_bias_m": 0.0,
- "steer_rate": 0,
- "lane_guard_m": 0.0,
- "use_ghost": 0,
- "ghost_k": 1.0,
- "ghost_heading_gain": 1.0,
- "diff_gain": 0.0
+ "pwm": 240
 }
