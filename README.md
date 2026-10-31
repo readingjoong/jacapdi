@@ -106,11 +106,11 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 |---|---|---|
 | `base` | (공집합) | 2차선 중간평가 코드. 회귀 기준 |
 | `v1` | one_side_clip, on_line_hold, step_accept, solid_cross_recovery, lane_settle | 1차선 경로 가드 (GUARDS) |
-| `v2` | GUARDS + corner_slowdown, speed_schedule | 가드 + 속도 스케줄러. 실차 1차 시험 기본 |
+| `v2` | GUARDS + corner_slowdown, speed_schedule | 가드 + 속도 스케줄러 |
 | `v2a` | v2 + arc_comp (기본 limiter=conf) | 평가점 원호 보정 (조향 κ). 벤치 뒤 승격 대상 |
 | `v2p` | v2 + controller_pp | Pure Pursuit 제어기. 실험 전용. 1차선 0/3, 2차선 1/3 (조향 권한 부족). 비권장 |
-| `v2f` | v2 + front_axle_ref | 앞쪽 평가 Stanley. 실험 프로필(PROFILES 에만). 10/31 1차선 20회 완주 20/20, 이탈 0 15/20 (v2a 8회 중 2회). v3 의 1차선으로 채택 |
-| `v3` | 1차선 = v2f + scope_hold, 2차선 = lane_settle, scope_hold (차선 범위 `LaneScope`) | 한 프로필로 2차선 base(비트 동일), 1차선 v2f, 변경 구간 v2f. `V3_LANE1` 한 줄이 1차선 자리 |
+| `v2f` | v2 + front_axle_ref | 앞쪽 평가 Stanley. 실험 프로필(PROFILES 에만). 10/31 1차선 20회 완주 20/20, 이탈 0 15/20 (v2a 8회 중 2회). v3 1차선의 바탕 |
+| `v3` | 1차선 = v2f + cross_continuity + scope_hold, 2차선 = lane_settle, scope_hold (차선 범위 `LaneScope`) | 한 프로필로 2차선 base(비트 동일), 1차선 v2f + 실선 연속성, 변경 구간도 1차선 알고리즘. `V3_LANE1` 한 줄이 1차선 자리. 실차 1차 시험 기본 |
 
 운전자 UI 노출 = `DRIVER_PROFILES` = base, v1, v2, v3. v2a·v2p·v2f 는 실험 프로필. `change_slope` 플래그는 존재하지만 어느 프로필에도 없음 (기본 OFF, 효과 미측정, 가정 속도 의존). 옛 `v3`(inner_bias) 삭제, 이름 v3 은 차선 범위 프로필로 재사용.
 
@@ -132,6 +132,7 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 | `step_accept` | (c) outlier 수용 시 x 0/0.4/0.8 변화량을 단계씩만 | v1 이상 | guard.accept_step_m 0.3 |
 | `short_fit_guard` | (d) 선 하나 ext 적합이 짧거나 기울기 과대면 폐기 | 없음 (기본 OFF, 벤치 뒤 결정) | guard.ext_min_span_m 0.0, ext_max_b 9.0 |
 | `solid_cross_recovery` | (e)(f)(g) 실선 넘음 복구: search_back(방향 스냅샷), 후보 창 확장, 연속 확인 뒤 즉시 수용 | v1 이상 | cross.search_back_m 0.3, search_max_sec 1.0, hold_last_sec 0.5, cand_max_cross_m 0.6, c_max_cross_m 0.7, near_m 0.25, max_age_sec 1.5, confirm_frames 2, min_points 15, enter_m −0.2, crossed_m 0.2, overlap_m 0.3 |
+| `cross_continuity` | (f) 전제 보정: 실선은 차 밑을 연속으로 지나야 반대쪽에 온다. 직전 관측이 차 밑·반대쪽(enter_m 초과)이 아닌데 반대쪽(y0 > near_m)에 처음 보이는 실선 = 옆 차로 바깥 실선 → 그 프레임은 실선 없이 점선만, 기억에도 안 남김. 1차선 급좌코너에서 c −0.70 우조향(경로 뒤집힘) 방지. solid_cross_recovery 필요 | v3 1차선 | 없음 (cross.near_m, enter_m 재사용) |
 | `lane_settle` | 차선 변경 상태기계 IDLE / CHANGING / SETTLING. ramp 끝에 규칙 전환 뒤 오프셋 전 경로 \|c\| < settle_c_m 가 settle_sec 지속(또는 max_sec)이면 IDLE. 변경 중 새 요청은 되돌리기만 즉시, 나머지 보류 | v1 이상 | lane.settle_c_m 0.15, settle_sec 0.5, max_sec 8.0 |
 | `change_slope` | 변경 중 S자 오프셋 기울기 d(off)/ds 를 경로 b 에 더함 (ds = assumed_speed·dt) | 없음 (기본 OFF, 효과 미측정) | lane.assumed_speed_mps 0.85 |
 | `corner_slowdown` | 속도 스케줄러: \|조향 %\| 히스테리시스 → 목표 pwm 직선 tune pwm / 코너 min(corner.pwm, tune pwm) → 저역통과 (20 Hz 255↔190 왕복 제거, 코너가 직선보다 빨라지지 않음, 출발 스위치 OFF·경로 상실 0.5 s 에 리셋) | v2 이상 | corner.steer_on_pct 60 (진입), steer_off_pct 45 (해제), pwm 190, tau_sec 0.3 |
@@ -151,10 +152,10 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 
 ## tests 실행법
 
-총 125개 (골든 base/v1/v2, variant, solid_cross, flags, controller, lane_change, lane_scope) + 셸 정적 검사 58.
+총 132개 (골든 base/v1/v2, variant, solid_cross, flags, controller, lane_change, lane_scope) + 셸 정적 검사 58.
 
 ```bash
-cd ~/jacapdi-docker && python3 -m pytest -q tests                # 호스트 (125 passed). tests/conftest.py 가 rclpy 스텁
+cd ~/jacapdi-docker && python3 -m pytest -q tests                # 호스트 (132 passed). tests/conftest.py 가 rclpy 스텁
 ~/jacapdi-docker/car.sh shell python3 -m pytest tests          # 컨테이너 안 (python3-pytest 는 Dockerfile 에 추가됨 → 이미지 재빌드 필요. 시스템 python numpy 1.21.5 라 저장 골든과 환경이 달라 git a41706e 모듈로 기준을 즉석 생성해 비교함)
 cd ~/jacapdi-docker && python3 -m pytest tests/test_base_identity.py   # 병합 게이트 (W0). 매 변경마다
 bash ~/jacapdi-docker/tests/test_shell_static.sh                # 셸 정적 검사
@@ -218,7 +219,16 @@ python3 tests/make_golden.py --module <py> --out <json>         # 골든 재생�
 | 1차선 v2a limiter conf | 3/3 완주, 코너 e1 0.05~0.09, 이탈 1~3 (우코너, 횡단보도 구간 s 28~32) |
 | 차선 변경 | 2→1 완료 5.1~6.3 s, 1→2 4.8~5.1 s (lane_change_sec 무관) |
 
-- 엄격 기준(이탈 0) 통과는 아직 없음. 남은 이탈 = (i) 1차선 우코너, 횡단보도 구간 (ii) 2차선 좌코너 점선 접촉
+- 위 표는 야간 리팩터 시점. 오후 v3 결과는 아래 표. 상세는 `docs/gazebo_1031.md`
+
+| v3 (최종) | 결과 |
+|---|---|
+| 1차선 1바퀴 | 완주 17/18, 이탈 0 10/18 (v2a 2/8) |
+| 2→1 / 1→2 | 완주 7/7 / 2/2 (첫 통합판 1→2 6/6), 변경 4.5~6 s |
+| 왕복 2바퀴 | 완주 2/4 (1차선 급코너 진입 지연 정지) |
+| 2차선 | base 와 같은 양상 (base 자체 S자 위빙 정지 19회 중 2회) |
+
+- 남은 이탈 = (i) 1차선 급코너 진입 지연(on_line_hold 오인) (ii) 2차선 좌코너 점선 접촉(base 그대로). 실패는 인식 12 Hz 이하 회차에 몰림
 - base 비트 동일: 골든 1040프레임 + 30 s 시퀀스 + 제어기 6250 격자, numpy 1.21/1.26 양쪽 미반박. 골든 밖 차이는 수정 또는 문서화 (비UTF-8 크래시 수정, status.json 키 추가 6, frames= 꼬리 추가, 시계 샘플 위치 HEAD 와 같게, 코너 pwm 상한 min(corner.pwm, tune pwm), 정차 중 스케줄러 리셋)
 - 사용자 결정 대기: speed_schedule 의 v_eff 눈금 (절대 vehicle.yaml 1.05 vs tune 상대). 현재 v2 는 Stanley 게인이 base 대비 약 1/1.9
 
@@ -237,16 +247,17 @@ python3 tests/make_golden.py --module <py> --out <json>         # 골든 재생�
 
 단계 (직전 통과 뒤에만)
 
-0. 체크리스트: `cat tune/algo` = base, `tune/lane` = 2, `variant.py --show base` 공집합, run_info 확인, 보조자 비상정지 위치, 컨테이너 안 `pytest tests` 녹색(같은 인터프리터에서 HEAD == 현재), 출발 직전 `status.json` `pwm`/`steer` 확인(정차 중 조향 포화면 카메라·차 위치 먼저)
-1. 2차선 base 회귀: ALGO=base, 중간평가 tune.json, 2바퀴. 수용 1:34 ± 5 s, 침범 비악화. 실패 → 이후 중단 (하드웨어/보정)
-2. 1차선 v2 (가드 + 감속, arc OFF, pp OFF): tune pwm ≥ corner.pwm 190 (200 이면 코너 감속 폭이 10 뿐이라 255 또는 corner.pwm 을 pwm−40 으로), 상단 S 제외 1바퀴. 수용 정지 0, 실선 완전 통과 0.
-   **알고 가기**: speed_schedule 분모가 vehicle.yaml 시뮬 눈금(255 → 1.05 m/s, measured:false) 이라 같은 stanley_gain 이 base 대비 직선 ~0.52배(PWM 200 ~0.65배) 로 희석된다. 2차선에서 v2 1바퀴를 base 와 비교해 침범이 나쁘면 v2 를 `GUARDS + corner_slowdown` 으로 줄이거나(variants.json 프로필) 측정 ③ 뒤 눈금을 다시 정한다(결정 항목: 절대 눈금 vehicle.yaml vs tune vehicle_speed_mps·pwm/pwm_tune 상대 눈금). 변형 전환은 정지 상태에서만
-3. 1차선 v2a (limiter conf): arc.shift_max_m 0.2 시작, 1바퀴. v2p 는 제외 (조향 권한 부족)
-4. 2→1 변경 ×3: 직선 구간, lane_change_sec 3.0, LANE_AT 예약 (사전 랩타임으로 초 산출, lane_events.txt 확인). 수용 완료 ≤ 6 s, 바깥 실선 통과 0
-5. 1→2 변경 ×3
+0. 체크리스트: `cat tune/algo` = 시험할 프로필(기본 base, 1차선 시험 v3), `tune/lane` = 2, `variant.py --show base` 공집합, run_info 확인, 보조자 비상정지 위치, 컨테이너 안 `pytest tests` 녹색(같은 인터프리터에서 HEAD == 현재), 출발 직전 `status.json` `pwm`/`steer` 확인(정차 중 조향 포화면 카메라·차 위치 먼저)
+1. 2차선 회귀: ALGO=base 또는 v3 (2차선은 비트 동일), 중간평가 tune.json, 2바퀴. 수용 1:34 ± 5 s, 침범 비악화. 실패 → 이후 중단 (하드웨어/보정)
+2. 1차선 v3 (`ALGO=v3 LANE=1 car_prep.sh`): 첫 바퀴 tune pwm 200 (코너 감속 폭이 작으면 corner.pwm 을 pwm−40 으로), 다음 255. 수용 정지 0, 실선 완전 통과 0.
+   front_axle_ref 평가점: 코너에서 바깥으로 밀리면 평가점을 앞으로(`tune/variants.json` 에 `{"params":{"front":{"ahead_m":0.89}}}`, x_e −0.18), 안쪽을 깎으면 뒤로(ahead_m 0.80 이하). 시뮬에서 여유가 좁음(x_e −0.26 부터 바깥 정지 급증)
+   **알고 가기**: speed_schedule 분모가 vehicle.yaml 시뮬 눈금(255 → 1.05 m/s, measured:false) 이라 같은 stanley_gain 이 base 대비 직선 ~0.52배(PWM 200 ~0.65배) 로 희석된다. v3 1차선도 speed_schedule 을 쓴다. 직선 흔들림이 크면 측정 ③ 뒤 눈금을 다시 정한다(결정 항목: 절대 눈금 vehicle.yaml vs tune vehicle_speed_mps·pwm/pwm_tune 상대 눈금). 변형 전환은 정지 상태에서만
+3. (선택) 1차선 v2 비교 1바퀴: v3 결과가 나쁠 때 원인 분리용. v2a·v2p 는 제외
+4. 2→1 변경 ×3 (v3): 직선 구간, lane_change_sec 3.0, LANE_AT 예약 (사전 랩타임으로 초 산출, lane_events.txt 확인). 수용 완료 ≤ 6 s, 바깥 실선 통과 0
+5. 1→2 변경 ×3 (v3), 그다음 왕복 (`LANE_AT=<초>:1,<초>:2`)
 
 중단 기준: 바깥 실선 완전 통과 1회, valid 정지 2회, ±50 뒤집힘 1 Hz 이상 3 s, 펌웨어 FAULT 1회, 코너 정지 (토크 부족)
 
 기록: run_info.txt (variant, 해시), line_path.log `frames=`, status.json 시계열 (steer, pwm, cte_raw, arc_shift, kappa_cmd, v_target), board_monitor ADC/T/S/P 0.2 s, frames.csv 10 Hz, lane_events.txt, 외부 영상 1대
 
-금지 (1차 시험): arc 부호 게이트, inner_bias, lane_change_sec 2.0~3.5 밖 (실차 3.0 부터), 코너 2 m 안 차선 변경, 상단 S 구간, 측정 ①~③ 없이 arc/pp, v2p. 시뮬 통과 = "시뮬 조건부 통과" 까지만
+금지 (1차 시험): arc 부호 게이트, inner_bias, lane_change_sec 2.0~3.5 밖 (실차 3.0 부터), 코너 2 m 안 차선 변경, 측정 ①~③ 없이 arc/pp, v2p. 시뮬 통과 = "시뮬 조건부 통과" 까지만
