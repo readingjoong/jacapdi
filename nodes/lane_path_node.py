@@ -11,17 +11,22 @@
 
 한 프레임 (아래 설명은 2차선 기준. 1차선은 좌우를 뒤집어서 같은 계산)
  1. 사진이 0.3 초 넘게 늦었거나 마스크가 없으면 실패 (6)
- 2. 실선/점선 마스크를 칠한다. 확신도 0.30 미만, 차 진행 방향과 60° 넘게 누운 실선(횡단보도·정지선 앞 굵은 선)은 버린다
+ 2. 실선/점선 마스크를 칠한다. 확신도 0.30 미만은 버린다. 도로를 가로지르는 실선(정지선, 교차로의 얇은 선)도 버린다:
+    - 실선 전체 방향이 차 진행 방향과 60° 넘게 벌어질 때
+    - 점선에 닿아 있고(10 cm 이내) 닿은 곳에서 그 점선과 45° 넘게 벌어질 때 (진짜 경계는 점선과 0.85 m 떨어져 나란함.
+      차가 이미 돌고 있으면 가로지르는 선이 차 기준으로는 덜 누워 보여서 첫 규칙만으로는 못 거름)
  3. find_path
     - 사진 아래→위 2줄씩: 실선의 안쪽 끝 = 오른쪽 경계, 점선의 안쪽 끝 = 왼쪽 경계 (위치·연결성 규칙으로 고름)
+    - 실선이 여러 개면 이어지는 선끼리 묶어 가장 긴 선, 그보다 10~50 cm 안쪽에 나란한 선이 있으면 그 안쪽 선 (주차선 무시)
     - 선마다 2차식. 점선 조각 사이 빈칸이 0.6 m 이하면 이어서 한 선으로 본다
     - 중심 = 선에서 수직 0.425 m (가로로는 0.425·√(1+기울기²)). 두 선의 폭이 맞으면 두 선의 가운데, 아니면 실선 기준
     - 경계가 하나도 없으면 "중심이 오른쪽 15 cm" 경로 (search_right). 2 초 넘게 계속되면 실패
     - 중심점들에 경로 곡선 (가까운 0.45 m 우선, 점이 부족하면 0.7 m 까지. 오차 15 cm 넘으면 실패)
- 4. cross_hold: 횡단보도/정지선을 0.5 초 안에 봤는데 search_right 면 → 믿은 경로 (최대 1.5 초)
+ 4. cross_hold: 횡단보도/정지선을 0.5 초 안에 봤는데 search_right 면 → 믿은 경로 (최대 1 초)
  5. outlier_hold: 믿은 경로(마지막으로 받아들인 경로)와 비교
     - 경로 점이 모두 0.4 m 보다 먼 곳에만 있으면(차 앞이 안 보임) → 믿은 경로
-    - x = 0 / 0.4 / 0.8 m 에서 10 cm 넘게 튀면 → 0.5 초까지 믿은 경로, 그 뒤엔 새 경로를 받아들임
+    - 두 경로가 둘 다 점을 가진 거리 구간(10 cm 이상 겹칠 때)에서 10 cm 넘게 튀면 → 0.5 초까지 믿은 경로, 그 뒤엔 새 경로를 받아들임.
+      안 겹치면(예: 믿은 경로는 차 바로 앞, 새 경로는 먼 점선 조각) 비교하지 않고 받아들임 (커브를 튐으로 잘못 보지 않게)
  6. 실패하면 직전 경로를 1 초까지 유지, 그 뒤 valid=false (제어기가 차를 세움)
 """
 import copy
@@ -43,7 +48,14 @@ from ipm import Ipm
 LANE_WIDTH_M = 0.85
 HALF = LANE_WIDTH_M / 2.0
 MIN_SCORE = 0.30           # 실선/점선 최소 확신도
-TRANSVERSE_DEG = 60.0      # 이 각도보다 누운 실선은 버림
+TRANSVERSE_DEG = 60.0      # 차 진행 방향과 이 각도보다 누운 실선은 버림
+CROSS_DASH_DEG = 45.0      # 점선에 닿은 실선이 닿은 곳에서 그 점선과 이 각도보다 벌어지면 버림
+TOUCH_M = 0.10             # 실선과 점선이 이 거리 안이면 닿은 것
+LOCAL_M = 0.3              # 실선 방향은 닿은 점에서 이 거리 안의 점들로 잼
+DASH_ELONG = 2.5           # 점선 조각이 이만큼 길쭉해야 방향 기준으로 씀 (화면 끝에 잘린 조각 제외)
+MIN_CHAIN_ROWS = 4         # 실선 후보가 이 줄 수보다 적게 이어지면 선으로 안 봄
+INNER_MIN_M = 0.10         # 고른 실선보다 이만큼 이상 안쪽에 나란한 실선이 있으면 그쪽을 경계로 (주차선 등은 바깥)
+INNER_MAX_M = 0.50         # 이보다 더 안쪽이면 다른 차로의 선이라 안 바꿈
 NEAR_RANGE_M = 0.45        # 경로 곡선에 평소 쓰는 거리
 EXT_RANGE_M = 0.7          # 점이 부족할 때 넓혀 볼 최대 거리 (줄 훑기도 여기까지)
 MAX_IMAGE_AGE_SEC = 0.3
@@ -54,7 +66,7 @@ DASH_MAX_GAP_M = 0.6       # 조각 사이 빈칸이 이보다 길면 잇지 않
 DASH_SEG_GAP_M = 0.06      # 점 사이가 이보다 벌어지면 다른 조각
 WIDTH_TOL_M = 0.25         # 두 선 사이 폭 허용 오차
 LINE_MAX_ERR_M = 0.08      # 선 하나의 곡선 오차가 이보다 크면 그 선은 안 씀
-CHECK_X = np.array([0.0, 0.4, 0.8])   # 경로 튐을 비교하는 지점 (m)
+OVERLAP_MIN_M = 0.10       # 새 경로와 믿은 경로의 점 구간(x)이 이만큼 겹칠 때만 튐을 비교
 JUMP_M = 0.10
 OUTLIER_HOLD_SEC = 0.5
 REF_MAX_AGE_SEC = 1.0      # 믿은 경로가 이보다 오래됐으면 비교하지 않음
@@ -62,7 +74,7 @@ FAR_ONLY_XMIN_M = 0.4
 CROSS_CLASSES = ("crosswalk_marking", "stop_line")
 CROSS_MIN_SCORE = 0.5
 CROSS_RECENT_SEC = 0.5
-CROSS_HOLD_MAX_SEC = 1.5
+CROSS_HOLD_MAX_SEC = 0.5
 TUNE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
 LANE_FILE = TUNE_DIR + "/lane"            # 달릴 차선 1 또는 2 (car.sh lane, tune_gui 가 씀)
 TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec 만 읽음
@@ -113,6 +125,17 @@ def fit_line(pts):
         ranges = [(ranges[0][0], ranges[-1][1])]
     f = LineFit(P, ranges, joined)
     return None if f.err > LINE_MAX_ERR_M else f
+
+
+def direction(P):
+    """점들이 가장 길게 퍼진 방향 (주성분 단위벡터)."""
+    return np.linalg.svd(P - P.mean(axis=0), full_matrices=False)[2][0]
+
+
+def inner_gap(a, b):
+    """선 b 가 선 a 보다 안쪽(차로 가운데 쪽)으로 얼마나 있나 (겹치는 줄의 중앙값). 겹치는 줄이 3 개 미만이면 None."""
+    common = a.keys() & b.keys()
+    return float(np.median([b[i] - a[i] for i in common])) if len(common) >= 3 else None
 
 
 def nearest(ys, target):
@@ -208,7 +231,10 @@ class LanePathNode(Node):
         if any(d.class_name in CROSS_CLASSES and d.score >= CROSS_MIN_SCORE for d in msg.detections):
             self.cross_seen = time.time()
         self.stats["frames"] += 1
+        rules = self.lane.rules
         self.off = self.lane.update(time.time())
+        if self.lane.rules != rules:
+            self.shift_held(LANE_WIDTH_M if self.lane.rules == 1 else -LANE_WIDTH_M)
         age = (self.get_clock().now() - Time.from_msg(msg.header.stamp)).nanoseconds * 1e-9
         shape = next(((d.mask.height, d.mask.width) for d in msg.detections if d.mask.height > 0), None)
         if age > MAX_IMAGE_AGE_SEC or shape is None:
@@ -218,15 +244,14 @@ class LanePathNode(Node):
         self.setup(h, w)
         md = np.zeros((h, w), np.uint8)    # 점선
         ms = np.zeros((h, w), np.uint8)    # 실선
-        for d in msg.detections:
-            if d.class_name not in ("solid_line", "dashed_line") or d.score < MIN_SCORE or not d.mask.data:
-                continue
-            poly = np.array([[p.x, p.y] for p in d.mask.data], np.float32)
-            if d.class_name == "solid_line" and self.is_transverse(poly):
+        lines = [(d.class_name, np.array([[p.x, p.y] for p in d.mask.data], np.float32)) for d in msg.detections
+                 if d.class_name in ("solid_line", "dashed_line") and d.score >= MIN_SCORE and d.mask.data]
+        dashes = [g for g in (self.ground(poly) for c, poly in lines if c == "dashed_line") if g is not None and g[3] >= DASH_ELONG]
+        for c, poly in lines:
+            if c == "solid_line" and self.is_transverse(poly, dashes):
                 self.stats["transverse_dropped"] += 1
                 continue
-            cv2.fillPoly(ms if d.class_name == "solid_line" else md,
-                         [np.clip(np.round(poly), [0, 0], [w - 1, h - 1]).astype(np.int32)], 255)
+            cv2.fillPoly(ms if c == "solid_line" else md, [np.clip(np.round(poly), [0, 0], [w - 1, h - 1]).astype(np.int32)], 255)
         if not (md.any() or ms.any()):
             self.last_reason = "no_line"
             return self.fail(msg.header)
@@ -251,20 +276,79 @@ class LanePathNode(Node):
         self.traj_pub.publish(traj)
         self.publish_band(traj.header, band, shape)
 
+    def shift_held(self, dy):
+        """차선 변경을 다 해서 규칙이 바뀐 순간: 붙잡아 둔 경로(믿은 경로, 직전 경로)를 새 차선 기준으로 옮긴다.
+        안 옮기면 새 규칙 경로가 0.85 m 튄 것으로 보여 튐방지가 원래 차선 경로를 0.5 초 내보낸다."""
+        for k in ("ref", "last_traj"):
+            t = getattr(self, k)
+            if t is not None:
+                t = copy.deepcopy(t); t.c += dy; setattr(self, k, t)
+        self.ref_band = self.band_of(self.ref) if self.ref_band is not None else None
+        self.last_band = self.band_of(self.last_traj) if self.last_band is not None else None
+
     def band_of(self, t):
         """경로 ± 0.425 m 띠의 사진 좌표 (화면용)."""
         bx = np.linspace(t.x_min_m, t.x_max_m, 12); by = np.polyval([t.a, t.b, t.c], bx)
         return [(float(a), float(b)) for a, b in self.ipm.to_px(np.r_[bx, bx[::-1]], np.r_[by + HALF, by[::-1] - HALF])]
 
-    def is_transverse(self, poly):
-        """실선 테두리 점들이 가장 길게 퍼진 방향(주성분)이 앞쪽과 TRANSVERSE_DEG 넘게 벌어지면 가로선."""
+    def ground(self, poly):
+        """마스크 테두리 → (바닥 점들 (N, 2), 가운데, 주된 방향 단위벡터, 길쭉한 정도). 점이 4 개 미만이면 None."""
         xf, yl = self.ipm.to_m(poly[:, 0], poly[:, 1])
         ok = (xf > -0.5) & (xf < 4.0)                    # 지평선 근처(변환이 이상해지는 점)는 제외
         if ok.sum() < 4:
-            return False
+            return None
         P = np.c_[xf[ok], yl[ok]]
-        dx, dy = np.linalg.svd(P - P.mean(axis=0), full_matrices=False)[2][0]
-        return math.degrees(math.atan2(abs(dy), abs(dx))) > TRANSVERSE_DEG
+        _, sv, vt = np.linalg.svd(P - P.mean(axis=0), full_matrices=False)
+        return P, P.mean(axis=0), vt[0], sv[0] / max(sv[1], 1e-9)
+
+    def is_transverse(self, poly, dashes):
+        """도로를 가로지르는 실선인가 (차 진행 방향과 60° 넘음, 또는 점선에 닿아 그 점선과 45° 넘음)."""
+        g = self.ground(poly)
+        if g is None:
+            return False
+        P, _, v, _ = g
+        if math.degrees(math.atan2(abs(v[1]), abs(v[0]))) > TRANSVERSE_DEG:
+            return True
+        lo, hi = P.min(axis=0) - TOUCH_M, P.max(axis=0) + TOUCH_M
+        for Q, _, vd, _ in dashes:
+            if np.any(Q.max(axis=0) < lo) or np.any(Q.min(axis=0) > hi):
+                continue                                 # 감싸는 상자끼리 떨어져 있으면 닿을 수 없음
+            d = np.hypot(P[:, None, 0] - Q[None, :, 0], P[:, None, 1] - Q[None, :, 1])   # 실선 점 × 점선 점 거리
+            i = np.unravel_index(np.argmin(d), d.shape)
+            if d[i] > TOUCH_M:
+                continue
+            local = P[np.hypot(*(P - P[i[0]]).T) < LOCAL_M]
+            vs = direction(local) if len(local) >= 4 else v
+            if math.degrees(math.acos(min(1.0, abs(float(np.dot(vs, vd)))))) > CROSS_DASH_DEG:
+                return True
+        return False
+
+    def solid_rows(self, sc, sk, yl, mirror):
+        """줄마다 실선 안쪽 끝 후보를 아랫줄과 15 cm 안으로 이어 선들로 묶고 하나를 고른다 → {줄 번호: y}.
+        새 선은 차 오른쪽 -1.2 ~ +0.2 m 에서만 시작. 기본은 가장 긴 선, 그보다 10~50 cm 안쪽에 나란한 선이 있으면 그쪽
+        (주차선처럼 차로 경계 바깥에 실선이 하나 더 보일 때. 안쪽 선이 몇 줄 끊겨도 바깥 선으로 옮겨 붙지 않음)."""
+        chains = []                              # [마지막 y, {줄 번호: y}]
+        for i, (row, _) in enumerate(self.rows):
+            starts = sc[sk[i]:sk[i + 1]]
+            if not starts.size:
+                continue
+            ys = -yl[row, starts] if mirror else yl[row, starts]
+            pairs = sorted((abs(v - c[0]), j, k) for j, c in enumerate(chains) for k, v in enumerate(ys) if abs(v - c[0]) < 0.15)
+            took_c, took_v = set(), set()
+            for _, j, k in pairs:                # 가까운 짝부터: 선마다 후보 하나, 후보마다 선 하나
+                if j not in took_c and k not in took_v:
+                    took_c.add(j); took_v.add(k); chains[j][0] = ys[k]; chains[j][1][i] = ys[k]
+            chains += [[v, {i: v}] for k, v in enumerate(ys) if k not in took_v and -1.2 < v < 0.2]
+        chains = [c[1] for c in chains if len(c[1]) >= MIN_CHAIN_ROWS]
+        if not chains:
+            return {}
+        best = max(chains, key=len)
+        for _ in range(len(chains)):
+            inner = [(g, c) for c in chains if c is not best and (g := inner_gap(best, c)) is not None and INNER_MIN_M <= g <= INNER_MAX_M]
+            if not inner:
+                break
+            best = max(inner, key=lambda gc: gc[0])[1]
+        return best
 
     def find_path(self, md, ms, header, mirror=False):
         """mirror (1차선): 실선은 구간의 오른쪽 끝, 점선은 왼쪽 끝을 쓰고 옆 좌표 부호를 바꿔 2차선과 같은 계산 → 결과를 다시 뒤집음."""
@@ -273,18 +357,11 @@ class LanePathNode(Node):
         sr, sc = np.nonzero(run_edges(ms[self.row_idx] > 0)[int(mirror)])       # 실선의 안쪽 끝 (줄 번호, 열)
         dr, dc = np.nonzero(run_edges(md[self.row_idx] > 0)[1 - int(mirror)])   # 점선의 안쪽 끝
         sk, dk = np.searchsorted(sr, np.arange(n + 1)), np.searchsorted(dr, np.arange(n + 1))   # 줄마다 시작 위치
+        solid = self.solid_rows(sc, sk, yl, mirror)
         R, D = [], []                            # 실선 안쪽 끝 (x, y), 점선 안쪽 끝 (x, y)
-        prev_r = prev_d = None
+        prev_d = None
         for i, (row, xf0) in enumerate(self.rows):
-            yr = yd = None
-            starts = sc[sk[i]:sk[i + 1]]
-            if starts.size:                      # 오른쪽 경계 = 실선 구간의 왼쪽 끝
-                ys = -yl[row, starts] if mirror else yl[row, starts]
-                if prev_r is None:               # 처음: 차 오른쪽(-1.2 ~ +0.2 m) 중 차로 폭 절반에 가장 가까운 것
-                    cand = [v for v in ys if -1.2 < v < 0.2]
-                    yr = nearest(cand, -HALF) if cand else None
-                else:                            # 이어서: 아랫줄과 15 cm 안쪽으로 이어지는 것만
-                    v = nearest(ys, prev_r); yr = v if abs(v - prev_r) < 0.15 else None
+            yr, yd = solid.get(i), None
             ends = dc[dk[i]:dk[i + 1]]
             if ends.size:                        # 왼쪽 경계 = 점선 구간의 오른쪽 끝
                 ys = -yl[row, ends] if mirror else yl[row, ends]
@@ -297,7 +374,7 @@ class LanePathNode(Node):
                     yd = nearest(cand, HALF) if cand else None
                 elif len(ys):
                     v = nearest(ys, prev_d); yd = v if abs(v - prev_d) < 0.2 else None
-            if yr is not None: prev_r = yr; R.append((xf0, float(yr)))
+            if yr is not None: R.append((xf0, float(yr)))
             if yd is not None: prev_d = yd; D.append((xf0, float(yd)))
 
         if not R and not D:
@@ -387,7 +464,11 @@ class LanePathNode(Node):
         if self.ref_ok(now):
             if traj.x_min_m > FAR_ONLY_XMIN_M:
                 return self.hold_ref(header, "far_only_hold(xmin=%.2f,%s)" % (traj.x_min_m, reason), "far_only_held")
-            jump = float(np.abs(np.polyval([traj.a, traj.b, traj.c], CHECK_X) - np.polyval([self.ref.a, self.ref.b, self.ref.c], CHECK_X)).max())
+            lo, hi = max(traj.x_min_m, self.ref.x_min_m), min(traj.x_max_m, self.ref.x_max_m)
+            jump = 0.0                                   # 두 경로가 둘 다 점을 가진 거리 구간에서만 비교. 안 겹치면 비교할 근거가 없어 받아들임
+            if hi - lo >= OVERLAP_MIN_M:
+                xs = np.linspace(lo, hi, 3)
+                jump = float(np.abs(np.polyval([traj.a, traj.b, traj.c], xs) - np.polyval([self.ref.a, self.ref.b, self.ref.c], xs)).max())
             if jump > JUMP_M:
                 if self.outlier_since is None:
                     self.outlier_since = now
