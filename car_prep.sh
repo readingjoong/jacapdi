@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 전원 켠 뒤 한 번: 장치 확인 -> 컨테이너 -> 파이프라인(웹캠/YOLO/경로/제어기) -> 보드 모니터 + 송신기 -> 화면 -> 준비 확인
-# 사용: ~/jacapdi-docker/car_prep.sh          화면 끄기: VIEW=0, 1차선에서 출발: LANE=1
+# 사용: ~/jacapdi-docker/car_prep.sh          화면 끄기: VIEW=0, 1차선에서 출발: LANE=1, 주행 변형: ALGO=<변형> (기본 base, 목록 python3 nodes/variant.py --list)
 # 이 창에서 Ctrl+C / 창 닫기 = 전부 끄기. car.sh all/lap 처럼 다른 스크립트가 부를 땐 PREP_HOLD=0
 source "$(dirname "$0")/car.sh"
 say "1/6 장치 확인 (웹캠 C920, 아두이노) - 최대 30초 대기"
@@ -25,11 +25,14 @@ shutdown_all() { trap - INT TERM HUP; echo
   else warn "car_prep 종료 (컨테이너가 이미 바뀌어서 아무것도 안 끔)"; fi; exit 0; }
 [ "$HOLD" = 1 ] && trap shutdown_all INT TERM HUP
 
-say "3/6 파이프라인 시작 (CONF=$CONF, ${LANE:-2}차선) - 출발 스위치 꺼짐"
+LANE="${LANE:-2}"; ALGO="${ALGO:-base}"
+[ "$LANE" = 1 ] || [ "$LANE" = 2 ] || die "LANE 은 1 또는 2"
+check_algo "$ALGO" || die "ALGO '$ALGO' 모름 (목록: $(list_algos))"
+say "3/6 파이프라인 시작 (CONF=$CONF, ${LANE}차선, 변형 $ALGO) - 출발 스위치 꺼짐"
 rm -f "$D/tune/go_until"
-echo "${LANE:-2}" > "$D/tune/lane"               # 출발 차선 (주행 중 변경: car.sh lane 1|2 또는 tune_gui 버튼)
+# 출발 차선·변형은 pipeline.sh 가 tune/lane·tune/algo 에 쓰고 run_info.txt 에 기록 (주행 중 변경: car.sh lane 1|2 / car.sh algo, tune_gui 버튼)
 RUN="$D/ab_runs/$(date +%m%d_%H%M%S)_conf$CONF"
-docker exec -d $C bash -c "RUN=$RUN CONF=$CONF bash $D/pipeline.sh > /tmp/pipeline.log 2>&1"
+docker exec -d $C bash -c "RUN=$RUN CONF=$CONF LANE=$LANE ALGO=$ALGO bash $D/pipeline.sh > /tmp/pipeline.log 2>&1"
 for i in $(seq 20); do [ -f "$RUN/run_info.txt" ] && break; sleep 1; done
 [ -f "$RUN/run_info.txt" ] || die "파이프라인 시작 실패: docker exec $C cat /tmp/pipeline.log"
 echo "$RUN" > /tmp/car_run_dir

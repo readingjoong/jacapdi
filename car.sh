@@ -5,6 +5,7 @@
 #   ~/jacapdi-docker/car.sh all [초]     car_prep → 엔터 → car_go
 #   ~/jacapdi-docker/car.sh lap [초]     car_prep → 차선 인식 확인 → 5초 카운트다운 → car_go (기본 75초)
 #   ~/jacapdi-docker/car.sh lane 1|2     달릴 차선 바꾸기 (주행 중에도, lane_change_sec 동안 부드럽게 옮김)
+#   ~/jacapdi-docker/car.sh algo <변형>    주행 변형 (주행 중에도). 목록·플래그: python3 nodes/variant.py --list / --show <변형>
 #   ~/jacapdi-docker/car.sh flash        아두이노에 펌웨어 업로드 (필요할 때만)
 #   ~/jacapdi-docker/car.sh shell [명령] 컨테이너 셸 (명령을 주면 그것만 실행)
 CONF="${CONF:-0.3}"                                           # YOLO 확신도 기준 (경로 노드가 실선/점선을 0.30 으로 다시 거름)
@@ -60,8 +61,23 @@ for _ in range(5): s.write(b's0l0r0\n'); time.sleep(0.05)
 s.close()" >/dev/null 2>&1 && say "정지 명령 s0l0r0 전송" || warn "정지 명령 전송 실패 (아두이노 연결 확인). 펌웨어가 0.3초 뒤 스스로 정지함"
 }
 
+set_file() {     # $1 파일에 $2 한 줄을 원자적으로 씀 (임시 파일 + mv. 노드가 반쯤 쓰인 파일을 읽지 않게)
+  printf '%s\n' "$2" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+check_algo() {   # 변형 이름 검증. 이름 목록의 출처는 nodes/variant.py 하나 (셸에 복제하지 않음)
+  python3 "$D/nodes/variant.py" --check "$1" >/dev/null 2>&1
+}
+list_algos() { python3 "$D/nodes/variant.py" --list 2>/dev/null | tr '\n' ' '; }
 set_lane() {     # 달릴 차선 1|2 (경로 노드가 다음 프레임에 읽고 lane_change_sec 동안 옮김)
-  echo "$1" > "$D/tune/lane.tmp" && mv "$D/tune/lane.tmp" "$D/tune/lane"; say "차선 -> $1차선"
+  set_file "$D/tune/lane" "$1"; say "차선 -> $1차선"
+}
+set_algo() {     # 주행 변형 (경로 노드·제어기가 다음 프레임에 읽음). 이름은 check_algo 를 통과한 것만
+  [ -f "$D/tune/go_until" ] && warn "주행 중 변형 전환: 제어기 pwm(코너 190↔직선)·Stanley 분모가 다음 주기에 계단으로 바뀜. 가능하면 정지 상태에서"
+  set_file "$D/tune/algo" "$1"; say "변형 -> $1"
+}
+usage() {        # 이 파일 머리의 주석 블록(2행부터 첫 비주석 행 앞까지)을 그대로 출력. 줄 번호 고정 없음
+  awk 'NR == 1 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "${BASH_SOURCE[0]}"
+  echo "변형 목록: $(list_algos)"
 }
 
 wait_keys() {    # $1 초 동안 키 기다리기: 1/2 = 차선 변경, q/스페이스 = 그만 (돌아옴). 터미널이 아니면 그냥 기다림
@@ -139,7 +155,8 @@ case "$1" in
          exec "$D/car_go.sh" "${2:-$DRIVE_SEC}" ;;
   lap)   lap "$2" ;;
   lane)  [ "$2" = 1 ] || [ "$2" = 2 ] || die "사용: car.sh lane 1|2"; set_lane "$2" ;;
+  algo)  check_algo "$2" || die "사용: car.sh algo <변형>  (목록: $(list_algos))"; set_algo "$2" ;;
   flash) flash ;;
   shell) shift; shell "$@" ;;
-  *)     sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *)     usage; exit 1 ;;
 esac

@@ -1,0 +1,10 @@
+# 차량 기하·속도 상수 (단일 출처). 읽는 곳: nodes/vehicle.py (경로 노드·제어기 공통, ROS 없음)
+# 경로 원점(IPM 원점) = 뒷축 앞 cam_to_rear_axle_m + ipm_x_near_m = 1.63 m. 손으로 합산한 1.63 을 코드에 두지 않는다.
+wheelbase_m: 0.56           # 축간거리 (앞축 -0.23, 뒷축 -0.79 실측)
+cam_to_rear_axle_m: 0.79    # 카메라 → 뒷축 (실측)
+ipm_x_near_m: 0.84          # IPM 가장 가까운 행의 카메라 전방 거리 (config/ipm_c920.yaml 2026-09-24 보정)
+max_steer_deg: 25.0         # 최대 조향각. 미실측(사양 5.1 ①) — 제어기 base 는 tune.json max_steer_deg 를 그대로 쓴다
+pwm_speed_mps:              # PWM → 속도 표 (선형 보간). 미실측(사양 5.1 ③), 값은 시뮬 sim_bridge 눈금(255 → 1.05 m/s)
+  0: 0.0
+  255: 1.05
+measured: false             # 5.1 ①~③ 실측 뒤 true 로

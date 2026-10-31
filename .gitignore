@@ -10,5 +10,7 @@ ros/log/
 tune/status.json
 tune/go_until
 tune/lane
+tune/algo
 *.tmp
 __pycache__/
+.pytest_cache/

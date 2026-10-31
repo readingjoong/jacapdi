@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       gazebo ros-humble-gazebo-ros-pkgs ros-humble-cv-bridge \
       ros-humble-ackermann-msgs ros-humble-tf-transformations \
       ros-dev-tools python3-pip python3-venv python3-colcon-common-extensions \
-      python3-rosdep python3-serial python3-scipy python3-sklearn \
+      python3-rosdep python3-serial python3-scipy python3-sklearn python3-pytest \
       build-essential ripgrep v4l-utils mesa-utils sudo less nano \
     && rm -rf /var/lib/apt/lists/*
 

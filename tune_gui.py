@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
 """주행 튜닝 슬라이더 (호스트에서 실행: python3 ~/jacapdi-docker/tune_gui.py, 글씨 크기: TUNE_UI_SCALE=2)
 슬라이더를 움직이면 tune/tune.json 에 저장되고, 컨테이너의 tunable_controller.py 가 0.05 초 안에 반영한다 (주행 중에도).
-위쪽 상태 줄 = 제어기가 0.2 초마다 쓰는 tune/status.json. 다른 곳에서 tune.json 을 바꾸면 슬라이더도 따라간다."""
-import json, os, time
+위쪽 상태 줄 = 제어기가 0.2 초마다 쓰는 tune/status.json. 다른 곳에서 tune.json 을 바꾸면 슬라이더도 따라간다.
+변형 버튼은 tune/algo 만 바꾼다 (목록·설명 = nodes/variant.py DRIVER_PROFILES). 변형 상수는 tune/variants.json."""
+import json, os, sys, time
 import tkinter as tk
 from tkinter import ttk, filedialog
 import tkinter.font as tkfont
 
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(ROOT, "nodes"))
+import variant   # noqa: E402  (ROS 임포트 없음)
+
 UI = float(os.environ.get("TUNE_UI_SCALE", "1.5"))
-DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tune")
-TUNE, DEFAULT, STATUS, LANE = DIR + "/tune.json", DIR + "/tune_default.json", DIR + "/status.json", DIR + "/lane"
+DIR = os.path.join(ROOT, "tune")
+TUNE, DEFAULT, STATUS, LANE, ALGO = DIR + "/tune.json", DIR + "/tune_default.json", DIR + "/status.json", DIR + "/lane", DIR + "/algo"
 
 # (키, 이름, 최소, 최대, 간격, 설명)
 SLIDERS = [
@@ -25,7 +30,7 @@ SLIDERS = [
     ("i_curv_max", "I 직선 기준 (1/m)", 0.0, 1.0, 0.05, "곡률이 이보다 작을 때만 I 항을 쌓음"),
     ("lane_timeout_sec", "경로 끊김 허용 (s)", 0.1, 1.0, 0.05, "이 시간 넘게 경로가 없으면 정지"),
     ("pwm", "뒷바퀴 PWM", 0, 255, 5, "뒷바퀴 모터 힘 (0~255)"),
-    ("lane_change_sec", "차선 변경 시간 (s)", 0.5, 4.0, 0.1, "차선을 바꿀 때 옆으로 0.85 m 옮기는 데 걸리는 시간. 짧으면 급하게 꺾음"),
+    ("lane_change_sec", "차선 변경 시간 (s)", 0.5, 6.0, 0.1, "차선을 바꿀 때 옆으로 0.85 m 옮기는 데 걸리는 시간. 짧으면 급하게 꺾음"),
 ]
 
 
@@ -56,7 +61,13 @@ class App:
             ttk.Button(lane, text="%d차선" % n, command=lambda n=n: self.set_lane(n)).pack(side="left", padx=4)
         root.bind("1", lambda e: self.set_lane(1)); root.bind("2", lambda e: self.set_lane(2))   # 이 창에서 1 / 2 키
         self.lane = tk.StringVar(); ttk.Label(lane, textvariable=self.lane, font=("TkDefaultFont", int(10 * UI), "bold")).pack(side="left", padx=8)
-        btn = ttk.Frame(top); btn.grid(row=2 * len(SLIDERS) + 2, column=0, columnspan=3, pady=(8, 0), sticky="w")
+        algo = ttk.Frame(top); algo.grid(row=2 * len(SLIDERS) + 2, column=0, columnspan=3, pady=(8, 0), sticky="w")
+        desc = " / ".join("%s %s" % (a, variant.PROFILE_DESC.get(a, "")) for a in variant.DRIVER_PROFILES)
+        ttk.Label(algo, text="변형 (%s):" % desc).pack(side="left")
+        for a in variant.DRIVER_PROFILES:
+            ttk.Button(algo, text=a, width=5, command=lambda a=a: self.set_file(ALGO, a)).pack(side="left", padx=3)
+        self.algo = tk.StringVar(); ttk.Label(algo, textvariable=self.algo, font=("TkDefaultFont", int(10 * UI), "bold")).pack(side="left", padx=8)
+        btn = ttk.Frame(top); btn.grid(row=2 * len(SLIDERS) + 3, column=0, columnspan=3, pady=(8, 0), sticky="w")
         ttk.Button(btn, text="기본값", command=lambda: self.apply(load(DEFAULT))).pack(side="left")
         ttk.Button(btn, text="프리셋 저장", command=self.save_preset).pack(side="left", padx=6)
         ttk.Button(btn, text="프리셋 열기", command=self.open_preset).pack(side="left")
@@ -76,7 +87,14 @@ class App:
         return {k: int(round(v.get())) if k == "pwm" else round(float(v.get()), 3) for k, (v, _, _) in self.vars.items()}
 
     def write(self):
-        self.pending = None; self.vals = self.collect()
+        self.pending = None; mine = self.collect()
+        try:                                                  # 쓰기 직전 mtime 재확인: 밖에서 바뀐 파일이면 그 내용 위에 내 13키만 덮음
+            if os.path.getmtime(TUNE) != self.my_mtime:
+                self.vals = {**load(TUNE), **mine}
+            else:
+                self.vals = mine
+        except (OSError, ValueError):
+            self.vals = mine
         with open(TUNE + ".tmp", "w") as f: json.dump(self.vals, f, indent=1, ensure_ascii=False)
         os.replace(TUNE + ".tmp", TUNE)
         self.my_mtime = os.path.getmtime(TUNE)                # 내가 쓴 시각 (밖에서 바뀐 것과 구분)
@@ -90,8 +108,11 @@ class App:
         self.set_all(d); self.write()
 
     def set_lane(self, n):
-        with open(LANE + ".tmp", "w") as f: f.write("%d\n" % n)
-        os.replace(LANE + ".tmp", LANE)
+        self.set_file(LANE, "%d" % n)
+
+    def set_file(self, path, text):
+        with open(path + ".tmp", "w") as f: f.write(text + "\n")
+        os.replace(path + ".tmp", path)
 
     def save_preset(self):
         p = filedialog.asksaveasfilename(initialdir=DIR, initialfile="preset_%s.json" % time.strftime("%m%d_%H%M"), defaultextension=".json")
@@ -116,6 +137,10 @@ class App:
         except OSError:
             self.lane.set("지금: 2차선")
         try:
+            with open(ALGO) as f: self.algo.set("지금: %s" % f.read().strip())
+        except OSError:
+            self.algo.set("지금: %s" % variant.DEFAULT_NAME)
+        try:
             s = load(STATUS)
             if time.time() - s["time"] > 2:
                 self.status.set("제어기 상태: 응답 없음 (car_prep.sh 실행했는지 확인)")
@@ -127,7 +152,8 @@ class App:
         self.root.after(200, self.poll)
 
 
-root = tk.Tk()
-for _n in ("TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
-    _f = tkfont.nametofont(_n); _f.configure(size=int(round(_f.cget("size") * UI)))   # 기본 글꼴 전부 UI 배 (음수 = 픽셀 단위, 부호 유지)
-App(root); root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    for _n in ("TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
+        _f = tkfont.nametofont(_n); _f.configure(size=int(round(_f.cget("size") * UI)))   # 기본 글꼴 전부 UI 배 (음수 = 픽셀 단위, 부호 유지)
+    App(root); root.mainloop()
