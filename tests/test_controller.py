@@ -512,3 +512,132 @@ def test_arc_limiter_constraint_rejects_unknown(tc, tmp_path):
     assert p.arc.limiter == 'conf' and any("arc" in s for s in log)
     _, p2 = V.parse_variants({"profiles": {}, "params": {"arc": {"limiter": "cancel", "kappa_gain": 0.6}}}, log=log.append)
     assert p2.arc.limiter == 'cancel' and p2.arc.kappa_gain == 0.6
+
+
+# ---------------- front_axle_ref (고전 Stanley: 앞축 평가) ----------------
+def _front_arc_coefs(R_r, xs, origin, sign=1.0):
+    """뒷축 반경 R_r 원호 주행(원 중심 = 뒷축 옆 sign·R_r, 앞축이 원 위) 의 경로를 경로 좌표 xs 점에서 2차 적합 → (a,b,c).
+    이 원 위에서는 앞축 접선각 = atan(L/R_r) = 필요한 조향, 앞축 옆오차 0."""
+    import vehicle
+    L = vehicle.wheelbase_m()
+    R = math.hypot(R_r, L)
+    xg = origin + np.asarray(xs, float)
+    ys = sign * (R_r - np.sqrt(R * R - xg * xg))
+    a, b, c = np.polyfit(np.asarray(xs, float), ys, 2)
+    return float(a), float(b), float(c)
+
+
+def _front_n(tc, tmp_path, tag, **front):
+    """front_axle_ref 제어기 + params.front 덮어쓰기."""
+    tdir = tmp_path / ("tune_front_%s" % tag); tdir.mkdir()
+    (tdir / "tune.json").write_text(json.dumps(HEAD_TUNE))
+    (tdir / "variants.json").write_text(json.dumps({"profiles": {"t": ["front_axle_ref"]}, "params": {"front": front}}))
+    (tdir / "algo").write_text("t\n")
+    return tc.Tunable(run="", tune_dir=str(tdir), now=Clock())
+
+
+@pytest.mark.parametrize("R_r,sign", [(3.0, 1.0), (2.0, -1.0), (5.0, 1.0), (10.0, -1.0)])
+def test_front_arc_steady_delta_exact(tc, tmp_path, R_r, sign):
+    """정상 상태 δ = atan(L/R_r), 옆오차 0: arc 외삽은 anchor 근처 3점 적합, poly 외삽은 앞축 근처 3점 적합(2차식 = 원의 국소 근사)."""
+    target = math.atan(tc.WHEELBASE * sign / R_r)
+    x_e = tc.WHEELBASE - tc.PATH_ORIGIN_X_M
+    n = _front_n(tc, tmp_path, "arc%g%g" % (R_r, sign), ahead_m=0.0, heading_gain=1.0)   # 고전 정의(앞축, 헤딩 1)
+    x_a = n.var.p.front.anchor_x_m
+    assert n.var.p.front.extrap == 'arc'
+    a, b, c = _front_arc_coefs(R_r, [x_a - 0.05, x_a, x_a + 0.05], tc.PATH_ORIGIN_X_M, sign)
+    e, psi, kappa = n._front_ref(a, b, c, x_e)
+    assert abs(e) < 1e-2 and abs(psi - target) < 1e-2             # 3점 2차 적합의 곡률 오차만 (R 2: 5 mm)
+    s, delta, sh = n.steer(n.p, _Traj(a, b, c, 40))
+    assert abs(delta - target) < 2e-2 and sh == 0.0
+    assert (s < 0) == (sign > 0) and n.kappa_f is None and n.arc_shift == 0.0
+    m = _front_n(tc, tmp_path, "poly%g%g" % (R_r, sign), extrap="poly", ahead_m=0.0, heading_gain=1.0)
+    a, b, c = _front_arc_coefs(R_r, [x_e - 0.1, x_e, x_e + 0.1], tc.PATH_ORIGIN_X_M, sign)
+    assert abs(a * x_e * x_e + b * x_e + c) < 1e-4
+    s, delta, sh = m.steer(m.p, _Traj(a, b, c, 40))
+    assert abs(delta - target) < 2e-3
+
+
+@pytest.mark.parametrize("R_r,sign", [(3.0, 1.0), (5.0, -1.0), (8.0, 1.0)])
+def test_front_arc_steady_from_ipm_window(tc, tmp_path, R_r, sign):
+    """IPM 창(경로 x 0~0.45 m) 적합을 앞축까지 외삽: arc 는 δ ≈ atan(L/R_r) (1.5° 안). poly 는 R 3 에서 접선각 부호가 뒤집힘."""
+    n = _front_n(tc, tmp_path, "win%g%g" % (R_r, sign), ahead_m=0.0, heading_gain=1.0)
+    a, b, c = _front_arc_coefs(R_r, np.linspace(0.0, 0.45, 10), tc.PATH_ORIGIN_X_M, sign)
+    s, delta, sh = n.steer(n.p, _Traj(a, b, c, 40))
+    target = math.atan(tc.WHEELBASE * sign / R_r)
+    assert abs(delta - target) < math.radians(1.5)
+    if R_r == 3.0:
+        m = _front_n(tc, tmp_path, "poly_win", extrap="poly")
+        e, psi, _ = m._front_ref(a, b, c, tc.WHEELBASE - tc.PATH_ORIGIN_X_M)
+        assert psi * target < 0                                 # 2차식 외삽: 원의 고차항 누락 → 앞축 접선각 반대 부호
+
+
+def test_front_arc_extrap_straight_matches_linear(tc, tmp_path):
+    """κ = 0(a = 0) 이면 arc 외삽 = 직선 외삽 = poly."""
+    n = make(tc, tmp_path, flags={"front_axle_ref"})
+    x_e = tc.WHEELBASE - tc.PATH_ORIGIN_X_M
+    e, psi, kappa = n._front_ref(0.0, 0.1, 0.05, x_e)
+    assert kappa == 0.0 and abs(e - (0.1 * x_e + 0.05)) < 1e-12 and abs(psi - math.atan(0.1)) < 1e-12
+
+
+def test_front_straight_offset_and_ahead(tc, tmp_path):
+    """직선 옆오차 e: δ = atan(k·e/(v+v_s)) (헤딩 0). ahead_m = PATH_ORIGIN_X_M − 축간거리 면 평가점 = IPM 원점(e = c, ψ = atan b)."""
+    n = make(tc, tmp_path, flags={"front_axle_ref"})
+    p = n.p
+    s, delta, sh = n.steer(p, _Traj(0.0, 0.0, 0.0, 40))
+    assert s == 0 and delta == 0.0
+    n.i_acc = 0.0
+    s, delta, sh = n.steer(p, _Traj(0.0, 0.0, 0.1, 40))
+    k = p["stanley_gain"]; v = p["vehicle_speed_mps"] + p["softening_speed_mps"]
+    assert abs(delta - (math.atan(k * 0.1 / v) + p["i_gain"] * 0.1 * DT)) < 1e-12 and s < 0
+    ahead = tc.PATH_ORIGIN_X_M - tc.WHEELBASE
+    m = _front_n(tc, tmp_path, "ahead", ahead_m=ahead, extrap="poly", heading_gain=1.0)
+    a, b, c = 0.4, 0.2, 0.05
+    s, delta, sh = m.steer(m.p, _Traj(a, b, c, 40))
+    x_e = tc.WHEELBASE - tc.PATH_ORIGIN_X_M + ahead
+    e = a * x_e * x_e + b * x_e + c; dy = 2 * a * x_e + b
+    assert abs(x_e) < 1e-12
+    assert abs(delta - (math.atan(dy) + math.atan(k * e / v))) < 1e-9   # κ(x_e)=0.8 ≥ i_curv_max → I 항 0
+
+
+def test_front_uses_speed_schedule_denominator(tc, tmp_path):
+    """corner_slowdown·speed_schedule 과 조합: 분모 = v_eff(스케줄러 pwm) + v_s."""
+    import vehicle
+    n = make(tc, tmp_path, flags={"front_axle_ref", "corner_slowdown", "speed_schedule"})
+    n.sched.pwm = 190.0
+    s, delta, sh = n.steer(n.p, _Traj(0.0, 0.0, 0.1, 40))
+    v = vehicle.v255_mps() * 190.0 / 255.0 + n.p["softening_speed_mps"]
+    assert abs(delta - (math.atan(n.p["stanley_gain"] * 0.1 / v) + n.p["i_gain"] * 0.1 * DT)) < 1e-12
+    assert n.corner_pwm(n.p, 90) < 255                         # 스케줄러도 같이 돈다 (|조향| 90 > 진입 60 → 감속 시작)
+
+
+def test_front_exclusive_and_profile():
+    import variant as V
+    log = []
+    prof, _ = V.parse_variants({"profiles": {"x": ["arc_comp", "front_axle_ref"], "y": ["front_axle_ref", "controller_pp"]}}, log=log.append)
+    assert prof["x"] == frozenset({"front_axle_ref"}) and prof["y"] == frozenset({"controller_pp"})
+    assert V.PROFILES["v2f"] == V.PROFILES["v2"] | {"front_axle_ref"}
+    assert "front_axle_ref" not in V.PROFILES["base"]
+    _, p = V.parse_variants({"params": {"front": {"ahead_m": -0.1}}}, log=log.append)
+    assert p.front == V.FrontAxle() and any("front" in s for s in log)   # 범위 위반 → 그룹 코드 기본값
+
+
+def test_front_not_called_in_base(tc, tmp_path, monkeypatch):
+    n = make(tc, tmp_path)
+    def boom(*a, **k): raise AssertionError("base 에서 front_axle_ref 호출")
+    monkeypatch.setattr(n, "_steer_front", boom)
+    for _ in range(10):
+        feed(n, _Traj(0.05, 0.1, 0.2))
+
+
+def test_front_defaults_bench_point(tc, tmp_path):
+    """코드 기본값 = 10/31 벤치 채택값 (x_e −0.22, 헤딩 0.2, arc 외삽). 평가점은 vehicle.yaml 기하에서 계산."""
+    n = make(tc, tmp_path, flags={"front_axle_ref"})
+    f = n.var.p.front
+    assert (f.ahead_m, f.heading_gain, f.k_scale, f.extrap, f.anchor_x_m) == (0.85, 0.2, 1.0, 'arc', 0.2)
+    x_e = tc.WHEELBASE - tc.PATH_ORIGIN_X_M + f.ahead_m
+    assert abs(x_e - (-0.22)) < 1e-9
+    a, b, c = 0.3, 0.2, 0.1                                     # 왼쪽으로 굽는 경로 → 왼쪽 조향(명령 음수)
+    s, delta, sh = n.steer(n.p, _Traj(a, b, c, 40))
+    e, psi, kappa = n._front_ref(a, b, c, x_e)
+    v = n.p["vehicle_speed_mps"] + n.p["softening_speed_mps"]
+    assert abs(delta - (0.2 * psi + math.atan(n.p["stanley_gain"] * e / v))) < 1e-12 and s < 0   # κ 0.5 ≥ i_curv_max → I 항 0

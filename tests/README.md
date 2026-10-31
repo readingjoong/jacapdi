@@ -40,6 +40,7 @@ rclpy·interfaces_pkg 는 `golden_lib.install_ros_stubs()` 가 항상 스텁으�
 | `identity_lib.py` | 골든 비교 공용 (첫 diff 위치를 경로로 출력) |
 | `test_base_identity.py` | U1~U3. 현재 모듈을 algo 부재 / `base` 두 조건으로 돌려 base 골든과 ==. tune.json 에 옛 변형 키(arc_comp 2 포함)와 variants.json 에 arc_comp 켜진 프로필을 넣어도 무시됨을 같은 비교로 확인. 변형 stats 는 전부 0 이어야 함 |
 | `test_variant_identity.py` | U4. v1 경로(프레임·시퀀스, stats base 12키 + v1 6키) 와 v2 제어기 골든 ==. 골든의 `inner_biased`(삭제된 v3) 는 현재 stats 에 없음을 확인 |
+| `test_lane_scope.py` | 차선 범위 프로필(LaneScope, 새 v3 = 1차선 V3_LANE1(= v2f) / 2차선 base). tune/lane·tune/lane_eff 읽기 규칙, 플래그 차선 = 경로 노드 Lane 실제 상태(실제 Lane+Variant 가짜 시계: SETTLING 중 보류된 요청 2→1→2·1→2→1, 정착 성공·타임아웃, scope_hold 는 S자 전체 1차선), variants.json lane1/lane2 형식, CLI --show 차선별 줄, 상태 플래그(corner_slowdown·arc_comp)가 켜지거나 꺼질 때만 제어기 상태 리셋. 골든: v3 2차선 변경 없음 == base(경로 프레임·시퀀스·제어기), 골든 시퀀스 요청 전 프레임 ==, 1차선 == v2f |
 
 ## 시퀀스 대본이 지나는 분기 (base_seq 기준)
 

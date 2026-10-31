@@ -265,7 +265,7 @@ def load_module(path, name, tune_dir):
 def make_tune_dir(path, tune, algo=None, lane=None, variants=None, go_until=1e12):
     """임시 tune 폴더. tune: dict → tune.json, algo: None 이면 파일 없음, variants: dict → variants.json."""
     os.makedirs(path, exist_ok=True)
-    for f in ("algo", "lane", "variants.json", "status.json", "tune.json", "go_until"):
+    for f in ("algo", "lane", "lane_eff", "variants.json", "status.json", "tune.json", "go_until"):
         try: os.remove(os.path.join(path, f))
         except OSError: pass
     with open(os.path.join(path, "tune.json"), "w") as f:

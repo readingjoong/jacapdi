@@ -32,6 +32,7 @@ LANE="${LANE:-2}"; ALGO="${ALGO:-base}"
 set_file() { printf '%s\n' "$2" > "$1.tmp" && mv "$1.tmp" "$1"; }   # car.sh set_file 과 같은 방식 (원자적 교체)
 set_file "$D/tune/lane" "$LANE"
 set_file "$D/tune/algo" "$ALGO"
+rm -f "$D/tune/lane_eff"   # 플래그 차선은 경로 노드가 시작 때 새로 씀 (이전 실행 값으로 제어기가 출발하지 않게)
 md5_of() { if [ -f "$1" ]; then md5sum "$1" | cut -d' ' -f1; else echo none; fi; }
 
 # 기록. 기존 키(tag conf webcam)는 유지, 옛 algo=(경로 노드 md5) 는 path_md5= 로 개명 (summarize_run.py 가 둘 다 읽음)

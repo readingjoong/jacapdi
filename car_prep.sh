@@ -29,7 +29,7 @@ LANE="${LANE:-2}"; ALGO="${ALGO:-base}"
 [ "$LANE" = 1 ] || [ "$LANE" = 2 ] || die "LANE 은 1 또는 2"
 check_algo "$ALGO" || die "ALGO '$ALGO' 모름 (목록: $(list_algos))"
 say "3/6 파이프라인 시작 (CONF=$CONF, ${LANE}차선, 변형 $ALGO) - 출발 스위치 꺼짐"
-rm -f "$D/tune/go_until"
+rm -f "$D/tune/go_until" "$D/tune/lane_eff"   # lane_eff: 경로 노드가 시작 때 다시 씀 (이전 실행의 플래그 차선이 남지 않게)
 # 출발 차선·변형은 pipeline.sh 가 tune/lane·tune/algo 에 쓰고 run_info.txt 에 기록 (주행 중 변경: car.sh lane 1|2 / car.sh algo, tune_gui 버튼)
 RUN="$D/ab_runs/$(date +%m%d_%H%M%S)_conf$CONF"
 docker exec -d $C bash -c "RUN=$RUN CONF=$CONF LANE=$LANE ALGO=$ALGO bash $D/pipeline.sh > /tmp/pipeline.log 2>&1"

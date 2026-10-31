@@ -28,11 +28,30 @@ base(HEAD 동작, 플래그 공집합) — tests/golden/base_ctrl.json 으로 �
                     보여야 한다. 0.5·(PATH_ORIGIN_X_M + x0)²·κ_f 를 빼서 계산 (내륜차 항 포함·대체). κ_f = tan(직전 주기 실제
                     조향각)/축간거리 의 저역통과(arc.kappa_tau_sec). 보정량 ±arc.shift_max_m. 경로 점수 num_points ≤ arc.min_points
                     인 프레임(탐색·되돌림 경로)은 shift 0. 부호 보존 게이트는 없다(사각지대 제거). 경로를 0.5 초 넘게 잃으면 κ_f 리셋.
-   controller_pp    Pure Pursuit(arc_comp 와 배타): x_t = pp.lookahead_x_m, y_t = a x_t² + b x_t + c,
+   controller_pp    Pure Pursuit(arc_comp·front_axle_ref 와 배타): x_t = pp.lookahead_x_m, y_t = a x_t² + b x_t + c,
                     D² = (PATH_ORIGIN_X_M + x_t)² + y_t², κ = 2 y_t / D², δ = atan(축간거리·κ) + I 항.
                     I 항은 base 와 같은 누적기(직선 |κ_path(x_t)| < i_curv_max, 끝까지 꺾지 않았을 때, 게인 pp.i_gain, 상한 i_max_deg).
                     heading/curvature/내륜차/arc 미사용. 원호 위 점열이면 κ = 1/R 이 정확히 나온다.
+   front_axle_ref   앞쪽 평가 Stanley(arc_comp·controller_pp 와 배타): 평가점을 IPM 창 뒤(앞축 쪽)로 외삽. x_e = 축간거리 − PATH_ORIGIN_X_M
+                    + front.ahead_m (IPM 좌표, 앞축 = −1.07). 채택값(코드 기본) ahead_m 0.85 = 앞축 앞 0.85 m = 뒷축 앞 1.41 m (IPM x_e −0.22, base 평가점 1.73 m).
+                    바깥 정지 여유가 좁다: x_e 를 −0.26 이하로 뒤로 보내면 정지 급증(10/31 1차선 벤치 −0.22 정지 0/20, −0.26 1/3, −0.30 4/5).
+                    e = y(x_e), ψ = 경로 접선각(x_e). 외삽 front.extrap: poly = 2차식 그대로,
+                    arc(기본) = anchor 점 front.anchor_x_m 의 위치·접선 θ_a·곡률 κ_a 로 정한 원을 따라 x_e 까지:
+                    sin ψ = sin θ_a + κ_a·(x_e − x_a), e = y_a + (x_e − x_a)·tan((θ_a + ψ)/2)  (현의 방향 = 두 접선각의 평균),
+                    δ = front.heading_gain·ψ + atan(front.k_scale·stanley_gain·e / (v_eff + softening_speed_mps)) + I 항(base 규칙, 게인 i_gain).
+                    고전 정의(ahead_m 0, heading_gain 1)는 원호에서 ψ = atan(L/R_뒷축) = 필요한 조향이라 정상 옆오차 0 이지만, 앞축 값은 외삽뿐이라
+                    곡률에 음의 가중이 걸려 코너 진입에서 바깥으로 꺾는다(10/31 1차선: 첫 코너 이탈·정지). 내륜차·arc 보정·curvature 항 미사용
+                    (평가점을 당겨 안쪽 평형을 줄이는 것으로 대체). v_eff 는 speed_schedule 이면 스케줄러 pwm 기준.
    cte_raw          모든 분기에서 보정 전 옆오차 a x0² + b x0 + c (status.json 표시용).
+   차선 범위         var.flags 는 Variant 가 tune/lane_eff(플래그 차선: 경로 노드가 Lane 실제 상태로 정해 원자적으로 씀)를 mtime 으로 읽어
+                    고른 집합(v3: 1차선 = V3_LANE1 = v2f, 2차선 = base). 부재·잘못된 값이면 tune/lane(요청 차선, variant.parse_lane), 시작 때 둘 다 부재 → 2.
+                    경로 노드가 쓴 다음 tick(0.05 s) 부터 새 차선 플래그 → 어긋남 최대 1프레임. scope_hold 프로필은 S자 ramp(CHANGING) 전체가
+                    1차선 플래그(front_axle_ref), lane_settle 보류 중에는 지금 달리는 차선의 플래그(규칙·시각 판단은 경로 노드 한 곳).
+                    상태 리셋은 상태를 쓰는 플래그가 켜지거나 꺼진 tick 에만: corner_slowdown 유무가 바뀌면 스케줄러, arc_comp 유무가 바뀌면 κ_f
+                    (꺼져 있던 동안 멈춘 상태로 다시 시작하지 않게. 유지되는 플래그의 상태는 이어감 — 예 v2→v2a 는 스케줄러 그대로).
+                    front_axle_ref 는 자체 필터 상태가 없다(매 주기 κ_f·kappa_cmd = None, 입력은 그 주기 경로와 스케줄러 pwm 뿐).
+                    I 누적기 i_acc 는 리셋하지 않는다: base·arc_comp·front_axle_ref 가 같은 게인 i_gain·상한 i_max_deg 로 공유 → 전환 순간 I 항 연속.
+                    base·두 차선 같은 프로필은 플래그가 바뀌지 않으므로 이 리셋이 일어나지 않는다(골든 불변).
 
 차량 기하(축간거리 0.56, 경로 원점 1.63 = 0.79 + 0.84)는 config/vehicle.yaml → nodes/vehicle.py 에서 읽는다.
 tune/tune.json (tune_gui.py 가 저장) 이 바뀌면 다음 주기(0.05 초)에 반영한다.
@@ -60,7 +79,7 @@ from variant import Variant
 D = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")   # tune.json / status.json / go_until 폴더
 STEER_MAX = 100                                  # 펌웨어 조향 명령 범위 ±100 (최대 조향의 1% 단위)
 WHEELBASE = vehicle.wheelbase_m()                # 축간거리 m (config/vehicle.yaml)
-PATH_ORIGIN_X_M = vehicle.path_origin_x_m()      # IPM 원점 = 뒷축 앞 m (cam_to_rear_axle + ipm_x_near). arc_comp·controller_pp 만 사용
+PATH_ORIGIN_X_M = vehicle.path_origin_x_m()      # IPM 원점 = 뒷축 앞 m (cam_to_rear_axle + ipm_x_near). arc_comp·controller_pp·front_axle_ref 만 사용
 DT = 0.05                                        # 명령 주기 s
 
 
@@ -110,7 +129,7 @@ class Tunable(Node):
         self.i_acc = 0.0                          # 옆오차 적분 (m·s)
         self.i_lost = 0.0                         # 경로 없던 시간 (s)
         self.kappa_f = None                       # arc_comp: 저역통과 κ (None = 다음 경로로 초기화)
-        self.kappa_cmd = None                     # status 표시: arc_comp 는 kappa_f, controller_pp 는 PP κ, base 는 None
+        self.kappa_cmd = None                     # status 표시: arc_comp 는 kappa_f, controller_pp 는 PP κ, base·front_axle_ref 는 None
         self.cte_raw = None                       # 보정 전 옆오차 m (모든 분기 공통)
         self.arc_shift = 0.0                      # arc_comp 보정량 m (꺼지면 0)
         self.sched = SpeedScheduler()             # corner_slowdown 속도 스케줄러
@@ -227,6 +246,31 @@ class Tunable(Node):
         self.kappa_f = None; self.kappa_cmd = kappa; self.arc_shift = 0.0
         return self._norm(p, delta), delta, 0.0
 
+    def _front_ref(self, a, b, c, x_e):
+        """front_axle_ref 평가점 x_e 의 (e, ψ, κ). poly: 2차식 값·기울기. arc: anchor 원을 따라 되돌아감 (원이 x_e 에 닿지 않으면 ψ = ±90°)."""
+        fr = self.var.p.front
+        if fr.extrap == 'poly':
+            dy = 2.0 * a * x_e + b
+            return a * x_e * x_e + b * x_e + c, math.atan(dy), 2.0 * a / (1.0 + dy * dy) ** 1.5
+        x_a = float(fr.anchor_x_m)
+        d = 2.0 * a * x_a + b
+        th_a = math.atan(d)
+        kappa = 2.0 * a / (1.0 + d * d) ** 1.5                      # anchor 곡률 (원 모델의 일정 κ)
+        psi = math.asin(float(np.clip(math.sin(th_a) + kappa * (x_e - x_a), -1.0, 1.0)))
+        e = a * x_a * x_a + b * x_a + c + (x_e - x_a) * math.tan(0.5 * (th_a + psi))   # κ = 0 이면 직선 외삽과 같음
+        return e, psi, kappa
+
+    def _steer_front(self, p, a, b, c):
+        """front_axle_ref: 앞쪽 평가 Stanley (front.ahead_m 0·heading_gain 1 이면 고전 앞축 Stanley). 반환 (조향, δ rad, shift 0.0)."""
+        fr = self.var.p.front
+        x_e = WHEELBASE - PATH_ORIGIN_X_M + float(fr.ahead_m)         # 평가점 (IPM 좌표, 앞축 −1.07 ~ IPM 원점 0: IPM 창 뒤로 외삽)
+        e, psi, curv_path = self._front_ref(a, b, c, x_e)           # 평가점 옆오차(경로가 왼쪽 +)·접선각·경로 κ
+        k = float(fr.k_scale) * float(p["stanley_gain"])
+        delta = float(fr.heading_gain) * psi + math.atan(k * e / (self.v_eff(p) + float(p["softening_speed_mps"])))
+        delta += self._i_term(p, float(p["i_gain"]), e, curv_path)  # I 항 직선 판정은 경로 κ
+        self.kappa_f = None; self.kappa_cmd = None; self.arc_shift = 0.0
+        return self._norm(p, delta), delta, 0.0
+
     def steer(self, p, t):
         """정상 경로 t → (조향 -100~100, 조향각 rad, 옮긴 거리 m). base 는 HEAD 와 연산 순서까지 동일."""
         flags = self.var.flags
@@ -235,6 +279,8 @@ class Tunable(Node):
         self.cte_raw = a * x * x + b * x + float(t.c)               # 보정 전 옆오차 (status 표시용, 명령 계산에 안 씀)
         if 'controller_pp' in flags:
             return self._steer_pp(p, a, b, float(t.c))
+        if 'front_axle_ref' in flags:
+            return self._steer_front(p, a, b, float(t.c))
         kappa0 = 2.0 * a / (1.0 + (2.0 * a * x + b) ** 2) ** 1.5
         if 'arc_comp' in flags:
             shift = self._arc_shift(p, x, int(t.num_points))
@@ -253,7 +299,13 @@ class Tunable(Node):
         return self._norm(p, delta), delta, shift
 
     def tick(self):
+        flags0 = self.var.flags
         self.reload(); self.var.load(now=self.now())
+        flags = self.var.flags                    # 상태를 쓰는 플래그가 켜지거나 꺼질 때만 그 상태 리셋 (프로필·플래그 차선 변경)
+        if ('corner_slowdown' in flags) != ('corner_slowdown' in flags0):
+            self.sched.reset()
+        if ('arc_comp' in flags) != ('arc_comp' in flags0):
+            self.kappa_f = None
         p = self.p
         stale = self.traj is None or self.now() - self.traj_t > p["lane_timeout_sec"]
         if stale:

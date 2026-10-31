@@ -39,16 +39,21 @@ def tdir(tmp_path):
 def test_profiles_static_contract():
     assert set(DRIVER_PROFILES) <= set(PROFILES)
     assert GUARDS <= FLAGS
-    for name, fl in PROFILES.items():
-        assert isinstance(fl, frozenset) and fl <= FLAGS, name
+    for name, fl in PROFILES.items():               # 두 차선 같은 프로필 = frozenset, 차선 범위 프로필 = LaneScope (차선별 frozenset)
+        sets = (fl.lane1, fl.lane2) if isinstance(fl, variant.LaneScope) else (fl,)
+        assert all(isinstance(x, frozenset) and x <= FLAGS for x in sets), name
     assert PROFILES["base"] == frozenset()
     assert PROFILES["v1"] == GUARDS
-    assert "lane_settle" in GUARDS and "change_slope" not in GUARDS and variant.LANE_FLAGS == {"lane_settle", "change_slope"}
+    assert "lane_settle" in GUARDS and "change_slope" not in GUARDS and variant.LANE_FLAGS == {"lane_settle", "change_slope", "scope_hold"}
     assert PROFILES["base"] < PROFILES["v1"] < PROFILES["v2"] < PROFILES["v2a"]
-    assert PROFILES["v2"] < PROFILES["v2p"]
-    assert {"arc_comp", "controller_pp"} - PROFILES["v2"] == {"arc_comp", "controller_pp"}
+    assert PROFILES["v2"] < PROFILES["v2p"] and PROFILES["v2"] < PROFILES["v2f"]
+    steer_refs = {"arc_comp", "controller_pp", "front_axle_ref"}           # 조향 평가 분기: 셋 중 하나만 (EXCLUSIVE 가 모든 쌍을 막음)
+    assert steer_refs - PROFILES["v2"] == steer_refs
+    assert {frozenset(e) for e in variant.EXCLUSIVE} == {frozenset({a, b}) for a in steer_refs for b in steer_refs if a < b}
     for name, fl in PROFILES.items():
-        assert not ({"arc_comp", "controller_pp"} <= fl), "%s: arc_comp 와 controller_pp 는 배타" % name
+        for x in ((fl.lane1, fl.lane2) if isinstance(fl, variant.LaneScope) else (fl,)):
+            for a, b in variant.EXCLUSIVE:
+                assert not ({a, b} <= x), "%s: %s 와 %s 는 배타" % (name, a, b)
     assert DRIVER_PROFILES[0] == "base"
 
 
@@ -65,7 +70,8 @@ def test_params_defaults_single_source():
     assert p.pp.lookahead_x_m == 0.1
     assert p.cross.max_age_sec >= p.cross.search_max_sec
     assert (p.lane.settle_c_m, p.lane.settle_sec, p.lane.max_sec, p.lane.assumed_speed_mps) == (0.15, 0.5, 8.0, 0.85)
-    assert set(variant.param_keys()) == {"cross", "guard", "corner", "arc", "pp", "lane"}
+    assert (p.front.ahead_m, p.front.heading_gain, p.front.k_scale, p.front.extrap, p.front.anchor_x_m) == (0.85, 0.2, 1.0, 'arc', 0.2)
+    assert set(variant.param_keys()) == {"cross", "guard", "corner", "arc", "pp", "front", "lane"}
 
 
 def test_repo_variants_json_is_override_only():
@@ -230,7 +236,8 @@ def test_requires_and_constraints(tdir):
     assert "corner_slowdown 가 필요" in joined and "params.corner 범위 위반" in joined and "params.arc 범위 위반" in joined
     for a, b in variant.REQUIRES:
         for name, fl in PROFILES.items():
-            assert not (a in fl and b not in fl), name
+            for x in ((fl.lane1, fl.lane2) if isinstance(fl, variant.LaneScope) else (fl,)):
+                assert not (a in x and b not in x), name
 
 
 def test_fixed_variant_ignores_files(tdir):
@@ -296,6 +303,8 @@ def test_cli_list_check_show(tdir):
     rc, out, _ = run_cli("--show", "v2a")
     assert rc == 0
     assert "arc_comp" in out and "cross.search_max_sec = 1.0" in out and "corner.pwm = 190" in out
+    rc, out, _ = run_cli("--show", "v2f")
+    assert rc == 0 and "front_axle_ref" in out.splitlines()[1] and "front.ahead_m = 0.85" in out and "front.extrap = arc" in out
     assert run_cli("--show", "bogus")[0] == 1
     # variants.json 의 추가 프로필도 CLI 가 안다
     write(os.path.join(tdir, "variants.json"), json.dumps({"profiles": {"exp": ["one_side_clip"]}}))

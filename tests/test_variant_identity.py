@@ -3,8 +3,8 @@
 
 - v1: 가드 (a)(b)(c)(e)(f)(g) 그대로. 리팩터 뒤 confirm_frames 기본 2 는 골든(즉시 수용 1프레임)과 달라지므로
   variants.json 으로 cross.confirm_frames=1 을 준다 (V1_VARIANTS). 현재 코드는 이 파일을 읽지 않아 영향 없음.
-  차선 변경 플래그(variant.LANE_FLAGS: lane_settle·change_slope, 10/31 추가) 는 골든 생성 때 없던 동작이므로 프로필 v1_legacy
-  (= GUARDS − LANE_FLAGS) 로 뺀다. 그 두 플래그 자체는 tests/test_lane_change.py 가 검사한다.
+  차선 변경 플래그(variant.LANE_FLAGS: lane_settle·change_slope·scope_hold, 10/31 추가) 는 골든 생성 때 없던 동작이므로 프로필 v1_legacy
+  (= GUARDS − LANE_FLAGS) 로 뺀다. 그 플래그들 자체는 tests/test_lane_change.py(lane_settle·change_slope)·test_lane_scope.py(scope_hold) 가 검사한다.
 - v2 제어기: 골든은 리팩터 전 v2(조향 비례 선형 감속, Stanley 분모 = tune vehicle_speed_mps). 사양 1.1/1.2 가 코너 감속을
   히스테리시스+저역통과 속도 스케줄러로 바꾸고(corner_slowdown) 그 속도를 Stanley 분모에 넣기로(speed_schedule) 결정했으므로
   pwm 열은 설계상 달라진다. 따라서 (1) speed_schedule 을 뺀 프로필 v2_legacy(가드 + corner_slowdown) 로 조향·shift·i_acc·kappa 열이

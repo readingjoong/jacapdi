@@ -56,6 +56,8 @@ bash "$T/repo/car.sh" algo bogus >/dev/null 2>&1; rc=$?
 bash "$T/repo/car.sh" algo "" >/dev/null 2>&1; rc=$?
 [ $rc = 1 ] && ok "car.sh algo '' → exit 1" || bad "car.sh algo '' → exit $rc"
 if [ $HAVE_VARIANT = 1 ]; then
+  bash "$T/repo/car.sh" algo v3 >/dev/null 2>&1; rc=$?           # 차선 범위 프로필도 이름 검증 한 곳(variant.py --check)으로 통과
+  [ $rc = 0 ] && [ "$(cat "$T/repo/tune/algo")" = v3 ] && ok "car.sh algo v3 (차선 범위 프로필) → exit 0, tune/algo=v3" || bad "car.sh algo v3 → exit $rc, tune/algo=$(cat "$T/repo/tune/algo")"
   bash "$T/repo/car.sh" algo base >/dev/null 2>&1; rc=$?
   [ $rc = 0 ] && [ "$(cat "$T/repo/tune/algo")" = base ] && ok "car.sh algo base → exit 0, tune/algo=base" || bad "car.sh algo base → exit $rc, tune/algo=$(cat "$T/repo/tune/algo")"
   n=$(python3 "$R/nodes/variant.py" --list | wc -l)
@@ -112,6 +114,12 @@ n=$(echo "$out" | grep -c "LANE_AT 항목 무시")
 [ -f "$EVDIR/lane_events.txt" ] && [ "$(wc -l < "$EVDIR/lane_events.txt")" = 2 ] && ok "OUT 없이 RUN/lane_events.txt 2줄" || bad "RUN/lane_events.txt: $(cat "$EVDIR/lane_events.txt" 2>/dev/null | wc -l)줄"
 grep -q "lane 2" "$EVDIR/lane_events.txt" 2>/dev/null && grep -q "lane 1" "$EVDIR/lane_events.txt" && ok "lane_events.txt 내용 (lane 2, lane 1)" || bad "lane_events.txt 내용"
 grep -q "차선, 변형" "$R/car_go.sh" && ok "car_go.sh 출발 메시지에 차선·변형" || bad "car_go.sh 출발 메시지에 차선·변형 없음"
+if [ $HAVE_VARIANT = 1 ]; then   # LANE_AT(set_lane) 이 쓴 tune/lane 을 Variant 가 그대로 읽어 v3 의 차선별 플래그를 고름 (셸에 차선 규칙 복제 없음)
+  echo v3 > "$T/repo/tune/algo"
+  fl=$(cd "$T/repo" && python3 -c "import sys; sys.path.insert(0, 'nodes'); import variant as V; v = V.Variant('tune'); print(v.lane, int(v.flags == V.PROFILES['v3'].lane1))" 2>&1)
+  [ "$fl" = "1 1" ] && ok "LANE_AT 뒤 tune/lane=1 → v3 가 1차선 플래그로 풀림" || bad "v3 차선 풀림: $fl (1 1 이어야)"
+  echo base > "$T/repo/tune/algo"
+fi
 awk '/lane_change_sec/ && !seen {seen=NR} /go_until"   # 출발!/ {go=NR} END {exit !(seen && go && seen < go)}' "$R/car_go.sh" \
   && ok "car_go.sh: LANE_AT 의 lane_change_sec ≥ 4.0 검사가 출발(go_until) 전에 있음" || bad "car_go.sh: lane_change_sec 검사 없음 또는 출발 뒤"
 

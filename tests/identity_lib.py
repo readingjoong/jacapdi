@@ -95,11 +95,11 @@ def assert_same(golden, current, what):
     raise AssertionError("%s: 골든과 다름 (%d 곳 중 앞부분)\n  %s" % (what, len(diffs), "\n  ".join(diffs)))
 
 
-def check_path(module_path, golden, algo, tag, variants=None, tune_override=None):
-    """단일 프레임 find_path 골든 비교."""
+def check_path(module_path, golden, algo, tag, variants=None, tune_override=None, lane=None):
+    """단일 프레임 find_path 골든 비교. lane: tune/lane 파일 값(None = 파일 없음 → 2), 차선 범위 프로필 검사용."""
     import synth
     tune = dict(golden["meta"]["tune"]); tune.update(tune_override or {})
-    td = G.make_tune_dir(os.path.join(workdir(), "tune_path_" + tag), tune, algo=algo, variants=variants)
+    td = G.make_tune_dir(os.path.join(workdir(), "tune_path_" + tag), tune, algo=algo, lane=lane, variants=variants)
     M = G.load_module(module_path, "cur_lane_path_" + tag, td)
     node = G.new_lane_node(M)
     frames = synth.frames(node.ipm)
@@ -109,9 +109,9 @@ def check_path(module_path, golden, algo, tag, variants=None, tune_override=None
     return len(frames)
 
 
-def check_seq(module_path, golden, algo, tag, stats_keys, variants=None, tune_override=None):
+def check_seq(module_path, golden, algo, tag, stats_keys, variants=None, tune_override=None, lane=None):
     tune = dict(golden["meta"]["tune"]); tune.update(tune_override or {})
-    td = G.make_tune_dir(os.path.join(workdir(), "tune_seq_" + tag), tune, algo=algo, variants=variants)
+    td = G.make_tune_dir(os.path.join(workdir(), "tune_seq_" + tag), tune, algo=algo, lane=lane, variants=variants)
     M = G.load_module(module_path, "cur_lane_seq_" + tag, td)
     node = G.new_lane_node(M)
     steps = G.sequence_steps(node.ipm)
@@ -131,13 +131,13 @@ def mask_cols(rows, cols):
     return [[None if i in cols else v for i, v in enumerate(r)] for r in rows]
 
 
-def check_ctrl(module_path, golden, algo, tag, variants=None, tune_override=None, skip_grid_cols=(), skip_seq_cols=()):
+def check_ctrl(module_path, golden, algo, tag, variants=None, tune_override=None, skip_grid_cols=(), skip_seq_cols=(), lane=None):
     """제어기 격자·시퀀스 골든 비교. skip_*_cols: 비교에서 빼는 열(사양으로 동작이 바뀐 열만; 호출 쪽이 이유를 적는다).
     반환: {tune 이름: (grid, seq)} 현재 출력 (추가 검사용)."""
     M = None; out = {}
     for name, tj in G.ctrl_tune_sets(golden["meta"]["tune"]).items():
         tj = dict(tj); tj.update(tune_override or {})
-        td = G.make_tune_dir(os.path.join(workdir(), "tune_ctrl_%s_%s" % (tag, name)), tj, algo=algo, variants=variants)
+        td = G.make_tune_dir(os.path.join(workdir(), "tune_ctrl_%s_%s" % (tag, name)), tj, algo=algo, lane=lane, variants=variants)
         if M is None:
             M = G.load_module(module_path, "cur_ctrl_" + tag, td)
         else:

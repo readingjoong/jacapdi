@@ -40,11 +40,22 @@ base(HEAD 동작)  — 변형 플래그 공집합(tune/algo 부재 또는 'base'
         실선과 cross.overlap_m 안에서 겹치는 점선이면 실선 폐기
     (g) 실선을 밟고 있고(STRADDLE 연속 cross.confirm_frames 프레임, 점 수 ≥ cross.min_points) 실선 하나로 만든 새 경로가
         믿은 경로보다 차로 쪽을 더 가리키면 outlier_hold 없이 즉시 수용
+ cross_continuity      (f) 의 전제 보정 (solid_cross_recovery 와 함께만 의미): 실선은 차 밑을 연속으로 지나야 반대쪽에 온다.
+                       직전 관측이 차 밑·반대쪽(cross.enter_m 초과)이 아닌데 반대쪽(y0 > cross.near_m)에 처음 보이는 실선 = 옆 차로 바깥 실선
+                       (1차선 급좌코너에서 안쪽 실선이 화면 밖으로 빠졌을 때) → 그 프레임은 실선 없이 점선만으로 다시 고르고(foreign_solid),
+                       (f) 의 '넘은 실선 바깥 점선 무시' 규칙도 entered 일 때만 적용(docstring (f) 전제와 코드 일치). 기억(last)에도 남기지 않음
  lane_settle           Lane 상태기계 IDLE/CHANGING/SETTLING: ramp 끝에 규칙 전환 뒤 오프셋 전 경로 |c| < lane.settle_c_m 가 lane.settle_sec 지속
                        (또는 lane.max_sec) 해야 IDLE. 변경 중 새 요청은 되돌리기(CHANGING 중, 원래 차선)만 즉시, 그 밖은 IDLE 까지 보류.
                        OFF 면 HEAD 의 순수 시간 전환(Lane.update settle=False) 그대로
  change_slope          변경 중 publish 가 traj.c += off 에 더해 traj.b += d(off)/ds (ds = lane.assumed_speed_mps·dt) → S자 접선이 경로 기울기에 반영
- (corner_slowdown / speed_schedule / arc_comp / controller_pp 는 제어기 플래그. 이 노드는 보지 않음)
+ (corner_slowdown / speed_schedule / arc_comp / controller_pp / front_axle_ref 는 제어기 플래그. 이 노드는 보지 않음)
+ 차선 범위 프로필(variant.LaneScope, 예 v3): 플래그 차선의 단일 출처 = 이 노드의 Lane 실제 상태. lane.update() 다음에 flag_lane() 을 정해
+                       var.set_lane() 으로 self.flags 를 풀고, 바뀔 때와 시작할 때 tune/lane_eff 에 원자적으로 쓴다(제어기 Variant 가 읽음).
+                       flag_lane: CHANGING 이면 scope_hold 있으면 1·없으면 목표 차선 change[3], 그 밖(IDLE·SETTLING·보류 중)은 lane.rules.
+                       → 즉시 처리되는 요청은 요청 프레임부터 새 차선 플래그(2→1 은 S자 시작부터 1차선, 1→2 는 S자 시작부터 2차선 —
+                       경계 규칙 lane.rules 는 ramp 끝에 바뀜), scope_hold(v3)는 S자 전체(양방향) 1차선 알고리즘, lane_settle 보류 중에는
+                       지금 차선 알고리즘 유지. lane.update 에 넘기는 lane_settle 판정은 직전 프레임 플래그로 하지만 차선 변경 플래그(LANE_FLAGS)는
+                       프로필 수준이라 두 차선 같으므로 결과가 같다.
 
 시계: self.now (기본 time.time, 파라미터 use_ros_clock=true 면 ROS 시계). 테스트는 생성자 인자 now 로 주입. 읽는 위치는 HEAD 와 같다
 (on_detections 머리에서 1회, 탐색 분기 _search_traj 안에서 1회, cross_hold/accept_or_hold/fail 각각). base 는 find_path 안에서 시계를 읽지 않는다.
@@ -71,7 +82,7 @@ from rclpy.time import Time
 from interfaces_pkg.msg import DetectionArray, Detection, Point2D, LaneTrajectory
 
 from ipm import Ipm
-from variant import Variant
+from variant import DEFAULT_LANE_CHANGE_SEC, LANE_EFF_NAME, Variant
 
 LANE_WIDTH_M = 0.85
 HALF = LANE_WIDTH_M / 2.0
@@ -101,11 +112,11 @@ CROSS_HOLD_MAX_SEC = 1.5
 TUNE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
 LANE_FILE = TUNE_DIR + "/lane"            # 달릴 차선 1 또는 2 (car.sh lane, tune_gui 가 씀)
 TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec 만 읽음
-LANE_CHANGE_SEC = 2.0                     # tune.json 에 없을 때 (HEAD 값. 10/31 벤치: 2.0·3.0 완주, 4.0 은 왕복 11.5 지점에서 코너와 겹쳐 정지)
+LANE_CHANGE_SEC = DEFAULT_LANE_CHANGE_SEC  # tune.json 에 없을 때 2.0 (HEAD 값, variant.py 단일 출처. 10/31 벤치: 2.0·3.0 완주, 4.0 은 왕복 11.5 지점에서 코너와 겹쳐 정지)
 DASH_MIN_FROM_SOLID_M = 0.4               # 점선 안쪽 끝은 실선 안쪽 끝보다 이만큼 이상 차로 쪽 (base·cross 공통)
 BASE_STATS_KEYS = ["frames", "ok", "both", "one_side", "held", "search", "transverse_dropped",
                    "outlier_held", "outlier_accepted", "far_only_held", "cross_held", "dash_joined"]   # HEAD 12키
-VARIANT_STATS_KEYS = ["c_clipped", "on_line_held", "outlier_stepped", "search_back", "solid_on_line_accept", "short_fit"]   # 플래그 통계. 추가는 끝에만
+VARIANT_STATS_KEYS = ["c_clipped", "on_line_held", "outlier_stepped", "search_back", "solid_on_line_accept", "short_fit", "foreign_solid"]   # 플래그 통계. 추가는 끝에만
 STATS_KEYS = BASE_STATS_KEYS + VARIANT_STATS_KEYS   # frames= 로그 줄 순서
 
 
@@ -379,6 +390,11 @@ class SolidCross:
     def entered(self):
         return self.prev is not None and self.prev > self.p.enter_m
 
+    def foreign(self, y0):
+        """(f) 전제: 실선은 차 밑을 연속으로 지나야 반대쪽(y0 > near_m)에 온다. 직전 관측이 차 밑·반대쪽(entered)이 아닌데
+        반대쪽에 처음 보이는 실선은 넘은 안쪽 실선이 아니라 옆 차로 바깥 실선(급코너에서 안쪽 실선이 화면 밖으로 빠졌을 때) → 경계로 쓰지 않음."""
+        return y0 is not None and y0 > self.p.near_m and not self.entered()
+
     def cand_max(self, base):
         """(f) 첫 줄 실선 후보 창 상한."""
         return self.p.cand_max_cross_m if self.entered() else base
@@ -464,6 +480,9 @@ class LanePathNode(Node):
         self.tune = TuneFile(TUNE_FILE)
         self.lane = Lane(log, self.now(), self.tune.update()); self.off = 0.0; self.slope = 0.0
         self.var = variant if variant is not None else Variant(TUNE_DIR, log=log, now=self.now())
+        self.lane_eff_path = os.path.join(os.path.dirname(self.lane.lane_file), LANE_EFF_NAME)   # 요청 차선 파일 옆 tune/lane_eff (제어기가 읽음)
+        self.lane_eff_written = None                                            # 마지막으로 tune/lane_eff 에 쓴 플래그 차선
+        self.sync_flag_lane()                                                   # 시작: Lane 초기 차선으로 플래그 + tune/lane_eff
         self.cross = SolidCross(self.var.p.cross)                               # base 는 생성만
         self.last_traj = None; self.last_band = None; self.last_ok_time = 0.0   # 직전 정상 경로 (실패 시 유지용)
         self.ref = None; self.ref_band = None; self.ref_time = 0.0              # 믿은 경로
@@ -476,6 +495,25 @@ class LanePathNode(Node):
     @property
     def flags(self):
         return self.var.flags
+
+    def flag_lane(self):
+        """플래그를 고르는 차선 (Lane 실제 상태): CHANGING 이면 scope_hold → 1, 아니면 목표 차선. 그 밖(IDLE·SETTLING·보류)은 lane.rules."""
+        if self.lane.change is not None:
+            return 1 if "scope_hold" in self.flags else self.lane.change[3]
+        return self.lane.rules
+
+    def sync_flag_lane(self):
+        """플래그 차선을 Variant 에 주고, 바뀌었으면 tune/lane_eff 에 원자적으로 쓴다(tmp + os.replace, 실패하면 다음 프레임에 다시)."""
+        fl = self.flag_lane()
+        self.var.set_lane(fl)
+        if fl != self.lane_eff_written:
+            try:
+                with open(self.lane_eff_path + ".tmp", "w") as f:
+                    f.write("%d\n" % fl)
+                os.replace(self.lane_eff_path + ".tmp", self.lane_eff_path)
+                self.lane_eff_written = fl
+            except OSError:
+                pass
 
     def setup(self, h, w):
         """사진 크기가 바뀌면: IPM 표, 훑을 줄 목록 (아래→위 2줄씩, 앞 거리가 줄어들거나 EXT_RANGE_M 를 넘으면 끝, x < -0.3 은 건너뜀)."""
@@ -499,6 +537,7 @@ class LanePathNode(Node):
         self.stats["frames"] += 1
         self.var.load(now=now)
         self.off = self.lane.update(now, self.tune.update(), "lane_settle" in self.flags, self.var.p.lane)
+        self.sync_flag_lane()                                                  # 차선 범위 프로필: Lane 실제 상태로 플래그 차선 (tune/lane_eff)
         self.slope = self.lane.slope_at(now, self.var.p.lane.assumed_speed_mps) if "change_slope" in self.flags else 0.0
         if self.cross.p is not self.var.p.cross:                               # variants.json 이 바뀌면 상수 객체 교체
             self.cross.p = self.var.p.cross
@@ -573,12 +612,17 @@ class LanePathNode(Node):
         if cross is not None:
             cross.expire(now)
             cand_max = cross.cand_max(SOLID_CAND_MAX_M)
-        R, D = self._scan_rows(md, ms, mirror, cand_max, cross)
+        R, D = self._scan_rows(md, ms, mirror, cand_max, cross, cont=cross is not None and "cross_continuity" in self.flags)
         if not R and not D:
             return self._search_traj(header, mirror, cross)
+        fs, fd = fit_line(R), fit_line(D)                                        # (fit_line 은 순수 함수: base 순서 영향 없음)
+        if cross is not None and "cross_continuity" in self.flags and fs is not None and cross.foreign(line_at_origin(fs)):
+            self.stats["foreign_solid"] += 1
+            R, D = self._scan_rows(md, ms, mirror, cand_max, cross, drop_solid=True, cont=True)   # 옆 차로 실선 → 실선 없이 점선만 다시 고름
+            fs, fd = None, fit_line(D)
+            if not D:
+                return self._search_traj(header, mirror, cross)                 # 경계 없음과 같음 (탐색 시계 유지)
         self.search_start = None
-
-        fs, fd = fit_line(R), fit_line(D)
         if cross is not None:
             cross.note_solid(now, None if fs is None else line_at_origin(fs))
         fit, note = self._fit_center(fs, fd, R, D, mirror)
@@ -600,7 +644,7 @@ class LanePathNode(Node):
         self.stats["dash_joined"] += int(fd is not None and fd.joined)
         return PathResult(t, [(float(a), float(b)) for a, b in band], kind, used, flags)
 
-    def _scan_rows(self, md, ms, mirror, cand_max, cross):
+    def _scan_rows(self, md, ms, mirror, cand_max, cross, drop_solid=False, cont=False):
         """줄마다 실선 안쪽 끝(R)·점선 안쪽 끝(D) 하나씩 고른다 (mirror 좌표). cross(SolidCross, base 는 None): (f) 넘은 실선·바깥 점선 규칙."""
         yl = self.ipm.yl
         n = len(self.rows)
@@ -612,7 +656,7 @@ class LanePathNode(Node):
         for i, (row, xf0) in enumerate(self.rows):
             yr = yd = None
             starts = sc[sk[i]:sk[i + 1]]
-            if starts.size:                      # 오른쪽 경계 = 실선 구간의 왼쪽 끝
+            if starts.size and not drop_solid:                      # 오른쪽 경계 = 실선 구간의 왼쪽 끝
                 ys = -yl[row, starts] if mirror else yl[row, starts]
                 if prev_r is None:               # 처음: 차 오른쪽(-1.2 ~ cand_max) 중 차로 폭 절반에 가장 가까운 것
                     cand = [v for v in ys if -1.2 < v < cand_max]
@@ -622,7 +666,7 @@ class LanePathNode(Node):
             ends = dc[dk[i]:dk[i + 1]]
             if ends.size:                        # 왼쪽 경계 = 점선 구간의 오른쪽 끝
                 ys = -yl[row, ends] if mirror else yl[row, ends]
-                if cross is not None and yr is not None and yr > cross.p.crossed_m:   # (f) 넘은 실선: 겹치는 점선이면 실선 폐기(점선 오인), 실선 바깥 점선은 주차 구획선으로 무시
+                if cross is not None and yr is not None and yr > cross.p.crossed_m and (not cont or cross.entered()):   # (f) 넘은 실선: 겹치는 점선이면 실선 폐기(점선 오인), 실선 바깥 점선은 주차 구획선으로 무시
                     if any(abs(v - yr) < cross.p.overlap_m for v in ys):
                         yr = None
                     else:

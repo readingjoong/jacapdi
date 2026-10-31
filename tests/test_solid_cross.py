@@ -37,6 +37,9 @@ class FixedVariant:
     def load(self, tune_dir=None, now=None):
         return False
 
+    def set_lane(self, lane):
+        return False
+
 
 class Clock:
     """주입 시계. 스텁 Node.get_clock() 이 보는 golden_lib.CLOCK 도 같이 맞춘다 (메시지 stamp 나이 계산)."""
@@ -238,3 +241,34 @@ def test_path_result_reason_format():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def _outer_solid_only(n, y0=-0.6, k=1.0):
+    """1차선 급좌코너 재현(10/31 v3g_l1_r4 stamp 41.1~42.8): 안쪽 실선·점선은 화면 밖, 옆 차로 바깥 실선만 오른쪽에서 왼쪽 앞으로 휘어 보임.
+    실제 좌표 y = y0 + k·x (x = IPM 창 좌표). mirror 로는 가까운 줄 +0.6, 먼 줄 < +0.2 → 먼 줄부터 첫 줄 후보 창(+0.2)에 걸림."""
+    import math
+    import numpy as np
+    s = np.arange(-1.0, 3.0, 0.01); sc = synth.Scene(n.ipm)
+    sc.add_line("solid_line", s, s, y0 + k * s, np.full_like(s, math.atan(k)), dashed=False)
+    return sc.detections()
+
+
+@pytest.mark.parametrize("cont", [False, True])
+def test_node_foreign_outer_solid_not_crossed(tmp_path, cont):
+    """cross_continuity: 실선이 차 밑을 지난 관측 없이 반대쪽에 처음 보이면 넘은 안쪽 실선이 아니다(옆 차로 바깥 실선).
+    끄면(v2f) 그 실선을 '넘은 실선'으로 보고 경로가 오른쪽 c = -cross.c_max_cross_m(-0.70) 까지 간다 = 기록의 경로 뒤집힘.
+    켜면 실선을 버리고(foreign_solid) 경계 없음과 같은 1차선 탐색(왼쪽)으로 간다."""
+    flags = variant.V3_LANE1 if cont else variant.PROFILES["v2f"]
+    n, clock = make_node(tmp_path, flags, lane=1)
+    feed(n, clock, frame(n, 1, dy=0.0, dyaw=0), 1.0)
+    feed(n, clock, frame(n, 1, dy=0.0, dyaw=0, drop=(0,)), 2.0)     # 안쪽 실선이 화면 밖 (점선만) > cross.max_age_sec → 기억 없음
+    assert n.cross.prev is None or n.cross.prev < n.var.p.cross.enter_m
+    rs = [feed(n, clock, _outer_solid_only(n), DT) for _ in range(15)]
+    t = last_traj(n)
+    if not cont:
+        assert any("solid_only" in r for r in rs) and t.c == pytest.approx(-n.var.p.cross.c_max_cross_m), (rs[-1], t.c)
+        assert n.stats["foreign_solid"] == 0
+    else:
+        assert not any("solid_only" in r for r in rs), rs
+        assert rs[-1].startswith("search_left") and t.c > 0, (rs[-1], t.c)   # 1차선 탐색 = 왼쪽(안쪽)
+        assert n.stats["foreign_solid"] == 15 and n.cross.last is None    # 기억에도 안 남김 → (f) 창 확장 없음

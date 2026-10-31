@@ -25,7 +25,7 @@ python3 ~/jacapdi-docker/tune_gui.py   # 슬라이더 (주행 중에도 바뀜)
 - 경로 노드, 제어기가 다음 프레임에 읽음 (mtime 기준). 두 노드 어긋남 최대 1프레임
 - 이름 검증 한 곳: `python3 nodes/variant.py --check <이름>` (exit 0/1). 셸, GUI, sim 전부 이것을 호출. `car.sh algo bogus` = exit 1
 - 파일 없음 = `base`. 모르는 이름 = `base` + 로그 1회
-- 운전자 UI 목록 = `--list` (base, v1, v2). 벤치 전용 v2a, v2p 는 `--list-all`. v2a 는 벤치 뒤 승격 대상, v2p 는 실험 전용(비권장)
+- 운전자 UI 목록 = `--list` (base, v1, v2, v3). 벤치 전용 v2a, v2p, v2f 는 `--list-all`. v3 = 2차선 base / 1차선 v2f (아래 차선 범위). v2p 는 실험 전용(비권장)
 - 주행, 벤치 시작 전 `cat tune/algo` 확인. `v2` 를 남겨 두고 시작 금지 (pipeline.sh, sim 6_repo.sh 미지정 = base)
 
 ### 자동 차선 변경 `LANE_AT`
@@ -56,7 +56,7 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 | `nodes/vehicle.py`, `config/vehicle.yaml` | 차량 기하 (wheelbase 0.56, cam_to_rear_axle 0.79, ipm_x_near 0.84 → path_origin 1.63, pwm→속도 표 `measured: false` = 시뮬 눈금). 제어기가 읽음 (경로 노드는 IPM 좌표만 쓰므로 안 읽음). `max_steer_deg` 는 실측 ① 기록용 — 제어기 base 는 HEAD 대로 tune.json 값을 씀 |
 | `tune/tune.json` | 운전자 키 (tune_gui 슬라이더). 변형 상수는 여기 없음 |
 | `tune/variants.json` | 프로필 추가 + `Params` override 만 (git 추적, 저장소 파일은 비어 있음 = 코드 기본값). 기본값 복제 금지(테스트). 유효값은 `variant.py --show` |
-| `tune/algo`, `tune/lane` | 런타임 선택 파일 (git 밖). 변형 이름 / 달릴 차선 1,2. 없으면 base / 2 |
+| `tune/algo`, `tune/lane` | 런타임 선택 파일 (git 밖). 변형 이름 / 달릴 차선 1,2. 없으면 base / 2. 차선 범위 프로필(v3)은 `tune/lane` 으로 차선별 플래그도 고름 |
 | `tests/` | 골든(base, v1, v2) + 단위 테스트 + 셸 정적 검사. 아래 tests 실행법 |
 | `nodes/yolov8_node.py` | 사진 → 선 검출 (YOLO 분할, GPU FP16) |
 | `nodes/serial_sender_node.py` | 명령 → 아두이노 시리얼 |
@@ -109,8 +109,19 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 | `v2` | GUARDS + corner_slowdown, speed_schedule | 가드 + 속도 스케줄러. 실차 1차 시험 기본 |
 | `v2a` | v2 + arc_comp (기본 limiter=conf) | 평가점 원호 보정 (조향 κ). 벤치 뒤 승격 대상 |
 | `v2p` | v2 + controller_pp | Pure Pursuit 제어기. 실험 전용. 1차선 0/3, 2차선 1/3 (조향 권한 부족). 비권장 |
+| `v2f` | v2 + front_axle_ref | 앞쪽 평가 Stanley. 실험 프로필(PROFILES 에만). 10/31 1차선 20회 완주 20/20, 이탈 0 15/20 (v2a 8회 중 2회). v3 의 1차선으로 채택 |
+| `v3` | 1차선 = v2f + scope_hold, 2차선 = lane_settle, scope_hold (차선 범위 `LaneScope`) | 한 프로필로 2차선 base(비트 동일), 1차선 v2f, 변경 구간 v2f. `V3_LANE1` 한 줄이 1차선 자리 |
 
-운전자 UI 노출 = `DRIVER_PROFILES` = base, v1, v2. v2a 는 벤치 뒤 승격 대상. `change_slope` 플래그는 존재하지만 어느 프로필에도 없음 (기본 OFF, 효과 미측정, 가정 속도 의존). `v3`(inner_bias) 삭제.
+운전자 UI 노출 = `DRIVER_PROFILES` = base, v1, v2, v3. v2a·v2p·v2f 는 실험 프로필. `change_slope` 플래그는 존재하지만 어느 프로필에도 없음 (기본 OFF, 효과 미측정, 가정 속도 의존). 옛 `v3`(inner_bias) 삭제, 이름 v3 은 차선 범위 프로필로 재사용.
+
+차선 범위 (`variant.LaneScope`, `lane_scope()`, v3)
+- 요청 차선 = `tune/lane` (1/2, 시작 때 부재 → 2, 주행 중 부재·빈 값·범위 밖 → 직전 값, 규칙 `parse_lane`)
+- 플래그 차선(단일 출처 = 경로 노드 Lane 실제 상태): CHANGING(S자 ramp 중)이면 `scope_hold` 있으면 1·없으면 목표 차선, 그 밖(IDLE·SETTLING·lane_settle 보류 중)은 `lane.rules`. 경로 노드가 `Variant.set_lane()` 으로 풀고 바뀔 때·시작할 때 `tune/lane_eff` 에 원자적으로 씀 → 제어기 `Variant.load()` 가 mtime 으로 읽음(부재·잘못된 값 → `tune/lane`), 어긋남 최대 1프레임
+- 결과: 즉시 처리되는 요청은 S자 시작부터 새 차선 플래그. `scope_hold`(v3)는 S자 전체(양방향)를 1차선 알고리즘(v2f)이 맡고, 정착 중 보류된 요청('피했다 바로 복귀')도 실제 S자가 시작될 때까지 지금 차선 플래그를 유지
+- 차선 변경 플래그 `LANE_FLAGS`(lane_settle, change_slope, scope_hold)는 프로필 수준: `lane_scope()` 가 두 차선에 똑같이 둔다. 변경이 없으면 출력에 영향 없음
+- 제어기는 상태를 쓰는 플래그가 켜지거나 꺼진 tick 에만 리셋: corner_slowdown → 스케줄러, arc_comp → κ_f (v2→v2a 처럼 유지되면 이어감). front_axle_ref 는 자체 필터 상태 없음, I 누적기는 같은 i_gain 공유라 유지
+- 2차선 base 비트 동일 증명: `tests/test_lane_scope.py` 가 v3 2차선(변경 없음)으로 경로 노드 1040 프레임·30 s 시퀀스·제어기 격자를 base 골든과 `==`, 골든 시퀀스(19 s 에 2→1)는 요청 전 프레임 전부 `==`. 1차선은 v2f 와 `==`
+- `tune/variants.json` 형식: `{"profiles": {이름: {"lane1": [...], "lane2": [...]}}}` 도 받음. `--show v3` 은 `flags[1차선]`·`flags[2차선]` 줄 추가
 
 플래그 (목적 / 속한 프로필 / 주요 상수 = `Params` 그룹.키, 기본값)
 
@@ -126,10 +137,12 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 | `corner_slowdown` | 속도 스케줄러: \|조향 %\| 히스테리시스 → 목표 pwm 직선 tune pwm / 코너 min(corner.pwm, tune pwm) → 저역통과 (20 Hz 255↔190 왕복 제거, 코너가 직선보다 빨라지지 않음, 출발 스위치 OFF·경로 상실 0.5 s 에 리셋) | v2 이상 | corner.steer_on_pct 60 (진입), steer_off_pct 45 (해제), pwm 190, tau_sec 0.3 |
 | `speed_schedule` | 같은 스케줄러 pwm 을 Stanley 분모에 (v_eff = v255·pwm/255, v255 = vehicle.yaml). corner_slowdown 필요(REQUIRES). **vehicle.yaml 이 measured:false 인 동안 분모 눈금이 base(0.5)와 달라 stanley_gain 이 ~1/1.9 로 희석됨** (아래 프로토콜) | v2 이상 | corner.* 공유 |
 | `arc_comp` | 평가점 원호 보정. shift = −0.5·(1.63+x0)²·κ_f, 상한 ±shift_max. κ_f = kappa_gain·tan(직전 조향)/L 저역통과. num_points ≤ min_points 면 0. limiter 기본 conf = num_points 신뢰도 가중 (≥ conf_points 전량, min_points+1 에서 conf_min_weight, 사이 선형. 두 선 ≈29점 전량, 선 하나 8~18점 0.5~). 다른 limiter: none, cancel, geo | v2a | arc.kappa_tau_sec 0.4, shift_max_m 0.25, min_points 6, kappa_gain 0.6, limiter conf, conf_points 24, conf_min_weight 0.5 |
-| `controller_pp` | Pure Pursuit 분기. κ = 2y_t/D², δ = atan(0.56κ) + I 항. arc_comp 와 배타. 실험 전용 | v2p | pp.lookahead_x_m 0.1, i_gain 0.04, gain 1.0, heading_gain 1.5 |
+| `controller_pp` | Pure Pursuit 분기. κ = 2y_t/D², δ = atan(0.56κ) + I 항. arc_comp·front_axle_ref 와 배타. 실험 전용 | v2p | pp.lookahead_x_m 0.1, i_gain 0.04, gain 1.0, heading_gain 1.5 |
+| `front_axle_ref` | 앞쪽 평가 Stanley. 평가점 x_e = 0.56 − 1.63 + ahead_m (IPM 좌표) 까지 anchor 점의 원(위치·접선·곡률)으로 외삽, δ = heading_gain·ψ + atan(k_scale·k·e/(v_eff+v_s)) + I 항. 내륜차·arc·curvature 항 미사용. arc_comp·controller_pp 와 배타. 채택값 ahead_m 0.85 = 앞축 앞 0.85 m = 뒷축 앞 1.41 m (x_e −0.22). 바깥 정지 여유 좁음: x_e −0.26 정지 1/3, −0.30 정지 4/5 | v2f, v3 1차선 | front.ahead_m 0.85, heading_gain 0.2, k_scale 1.0, extrap arc, anchor_x_m 0.2 |
+| `scope_hold` | 차선 범위 프로필 전용(경로 노드 플래그 차선). 변경 구간(Lane CHANGING, S자 ramp) 전체를 1차선 플래그로 | v3 | 없음 (S자 길이 = tune.json lane_change_sec) |
 
 - 상수 출처: `Params` dataclass (코드) 가 유일한 기본값. `tune/variants.json` = `{"profiles": {이름: [플래그]}, "params": {"cross": {...}, ...}}` 는 **추가·override 만** (저장소 파일은 `{"profiles": {}, "params": {}}`). 기본값과 같은 항목을 적으면 테스트 실패
-- 로더: 알 수 없는 키 = 오류 로그 + 무시. 파일 부재·빈 파일·비 UTF-8 = 코드 기본값(노드가 죽지 않음). 배타 `arc_comp`/`controller_pp`, 의존 `speed_schedule → corner_slowdown`, 범위 `CONSTRAINTS`(예 steer_off < steer_on, 0 ≤ pwm ≤ 255) 위반 = 로그 + 제거/그룹 기본값. 제약 `cross.max_age_sec ≥ cross.search_max_sec` 를 `max()` 로 보장 + 경고
+- 로더: 알 수 없는 키 = 오류 로그 + 무시. 파일 부재·빈 파일·비 UTF-8 = 코드 기본값(노드가 죽지 않음). 배타 `arc_comp`/`controller_pp`/`front_axle_ref` (셋 중 하나), 의존 `speed_schedule → corner_slowdown`, 범위 `CONSTRAINTS`(예 steer_off < steer_on, 0 ≤ pwm ≤ 255) 위반 = 로그 + 제거/그룹 기본값. 제약 `cross.max_age_sec ≥ cross.search_max_sec` 를 `max()` 로 보장 + 경고
 - 벤치 재현: 모든 run 에 variant, tune_md5, variants_md5, git_diff_md5 기록
 - 삭제됨 (세션 기록에만): v3 inner_bias, arc 모드 1(경로 κ 소스), arc 부호 게이트, tune.json 변형 18키
 - 상태 enum `LaneState` (경로 노드): NORMAL / STRADDLE / CROSSED / LOST / FAILED. `SolidCross.state` 가 관측에서 파생하는 **관측용** 값(테스트·진단). 노드 분기는 `SolidCross` 질의 메서드(entered/cand_max/c_limit/search_dir/accept_immediately). 전이표는 클래스 docstring
@@ -138,10 +151,10 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 
 ## tests 실행법
 
-총 90개 (골든 base/v1/v2, variant, solid_cross, flags, controller, lane_change) + 셸 정적 검사 56.
+총 125개 (골든 base/v1/v2, variant, solid_cross, flags, controller, lane_change, lane_scope) + 셸 정적 검사 58.
 
 ```bash
-cd ~/jacapdi-docker && python3 -m pytest -q tests                # 호스트 (90 passed). tests/conftest.py 가 rclpy 스텁
+cd ~/jacapdi-docker && python3 -m pytest -q tests                # 호스트 (125 passed). tests/conftest.py 가 rclpy 스텁
 ~/jacapdi-docker/car.sh shell python3 -m pytest tests          # 컨테이너 안 (python3-pytest 는 Dockerfile 에 추가됨 → 이미지 재빌드 필요. 시스템 python numpy 1.21.5 라 저장 골든과 환경이 달라 git a41706e 모듈로 기준을 즉석 생성해 비교함)
 cd ~/jacapdi-docker && python3 -m pytest tests/test_base_identity.py   # 병합 게이트 (W0). 매 변경마다
 bash ~/jacapdi-docker/tests/test_shell_static.sh                # 셸 정적 검사
@@ -153,11 +166,12 @@ python3 tests/make_golden.py --module <py> --out <json>         # 골든 재생�
 | `test_base_identity.py` | base 경로 노드 ≥1000 프레임, 30 s 시퀀스(주입 시계), 제어기 격자 | HEAD 골든과 `==` diff 0 (U1~U3), v1/v2 골든 (U4). 골든은 numpy 1.26.4·cv2 4.11 로 생성(meta); 다른 환경이면 같은 인터프리터로 HEAD 모듈을 돌려 기준을 만든다 |
 | `test_variant_identity.py` | v1/v2 골든 (LANE_FLAGS 는 골든 생성 시점에 없던 플래그라 뺀다) | U4 |
 | `test_lane_change.py` | lane_settle 상태기계 전이, 되돌리기, 보류, change_slope 기울기, base 는 순수 시간 전환 | U10 |
-| `test_variant.py` | 부재→base, 모름→base+로그 1, 프로필 포함 관계, variants.json 키 ⊆ dataclass + 기본값 복제 없음, DRIVER_PROFILES ⊆ PROFILES, max_age ≥ search_max, REQUIRES/CONSTRAINTS, 비 UTF-8 바이트, 고정 변형, 미래 mtime | U5 |
+| `test_variant.py` | 부재→base, 모름→base+로그 1, 프로필 포함 관계(배타 쌍 전부), params 그룹 집합(front 포함), variants.json 키 ⊆ dataclass + 기본값 복제 없음, DRIVER_PROFILES ⊆ PROFILES, max_age ≥ search_max, REQUIRES/CONSTRAINTS, 비 UTF-8 바이트, 고정 변형, 미래 mtime | U5 |
 | `test_solid_cross.py` | 전이 (i)~(iv), confirm_frames 2, 1프레임 오검출 → ref 불변, 방향 스냅샷 | U6 |
 | `test_flags_independent.py` | 단독 플래그에서 해당 stats 키만 증가 | U7 |
-| `test_controller.py` | 직선 shift 0, num_points 게이트, kappa_f None, PP 원호 κ 오차 <1e-6, pwm 변화율 ≤65/0.3 s, 코너 pwm ≤ tune pwm (150/190/255), 출발 스위치 OFF 중 스케줄러 리셋, status.json 키 = HEAD 10 + 6 | U8 |
-| `test_shell_static.sh` | 셸/GUI/sim 프로필 목록 == `variant.py --list`, run_info 키, LANE_AT 구문 오류 무시 (56개) | U9 |
+| `test_controller.py` | 직선 shift 0, num_points 게이트, kappa_f None, PP 원호 κ 오차 <1e-6, front_axle_ref(원호 정상 δ = atan(L/R), IPM 창 외삽 1.5° 안, 직선 = 선형 외삽, 배타·범위 위반, base 미호출, 기본값 = 벤치 채택값), pwm 변화율 ≤65/0.3 s, 코너 pwm ≤ tune pwm (150/190/255), 출발 스위치 OFF 중 스케줄러 리셋, status.json 키 = HEAD 10 + 6 | U8 |
+| `test_lane_scope.py` | v3 차선 범위: tune/lane·lane_eff 규칙, 플래그 차선(보류된 요청 포함), lane1/lane2 형식, 제어기 전환 tick 리셋, v3 2차선 == base 골든, 1차선 == v2f | 골든 `==` |
+| `test_shell_static.sh` | 셸/GUI/sim 프로필 목록 == `variant.py --list`, run_info 키, LANE_AT 구문 오류 무시, `car.sh algo v3`, LANE_AT 뒤 v3 1차선 풀림 (58개) | U9 |
 | `synth.py` | 합성 마스크 (직선, R 1.5~5 m, dy, dyaw, 점선 빈칸, 실선 넘음, 주차선, 횡단보도). sim 의존 없음 | 골든 입력 |
 
 골든 생성 조건: base = HEAD 모듈. v1 = 리팩터 전 작업 트리, `confirm_frames 1` 고정. v2 = `corner_slowdown` 만 (arc 제외).
