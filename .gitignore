@@ -12,3 +12,5 @@ tune/go_until
 tune/lane
 *.tmp
 __pycache__/
+# 수동 주행으로 모은 학습 사진
+manual_drive/Collected_Datasets/
