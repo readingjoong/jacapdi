@@ -26,6 +26,7 @@ SLIDERS = [
     ("lane_timeout_sec", "경로 끊김 허용 (s)", 0.1, 1.0, 0.05, "이 시간 넘게 경로가 없으면 정지"),
     ("pwm", "뒷바퀴 PWM", 0, 255, 5, "뒷바퀴 모터 힘 (0~255)"),
     ("lane_change_sec", "차선 변경 시간 (s)", 0.5, 4.0, 0.1, "차선을 바꿀 때 옆으로 0.85 m 옮기는 데 걸리는 시간. 짧으면 급하게 꺾음"),
+    ("obstacle_dist_m", "장애물 피하기 거리 (m)", 0.0, 3.0, 0.1, "내 차선에 선 차가 앞범퍼에서 이 거리 안에 보이면 옆 차선으로 변경. 0 = 끔"),
 ]
 
 
@@ -37,7 +38,7 @@ def load(path):
 class App:
     def __init__(self, root):
         self.root = root; root.title("자캡디 주행 튜닝")
-        self.vals = load(TUNE) if os.path.exists(TUNE) else load(DEFAULT)
+        self.vals = {**load(DEFAULT), **(load(TUNE) if os.path.exists(TUNE) else {})}   # tune.json 에 없는 새 항목은 기본값
         self.vars = {}; self.pending = None; self.my_mtime = None
         top = ttk.Frame(root, padding=8); top.pack(fill="both", expand=True)
         self.status = tk.StringVar(value="제어기 상태: 대기")

@@ -8,6 +8,9 @@
 달릴 차선 = tune/lane 파일 (1 또는 2, 없으면 2). 주행 중에 바꾸면 (car.sh lane 1/2, tune_gui 버튼)
 지금 차선 경로에 옆 이동을 0 → ±0.85 m 까지 lane_change_sec(tune.json, 기본 2 초) 동안 S자로 더하고,
 다 옮기면 새 차선 규칙으로 바꾼다. 도중에 되돌리면 그 자리에서 다시 돌아온다.
+서 있는 장애물 차(YOLO "car")가 내 차선에서 앞범퍼부터 obstacle_dist_m(tune.json, 슬라이더) 안에 보이면 옆 차선을
+같은 방식으로 요청한다 (tune/lane 에 씀). 몇 차선인지 = 차 박스 맨 아래 가운데가 근처 점선보다 왼쪽(1)인지 오른쪽(2)인지,
+또는 내 차선 실선(2차선: 오른쪽, 1차선: 왼쪽 안쪽 실선)에서 차로 폭 안인지 (lane_of).
 
 한 프레임 (아래 설명은 2차선 기준. 1차선은 좌우를 뒤집어서 같은 계산)
  1. 사진이 0.3 초 넘게 늦었거나 마스크가 없으면 실패 (6)
@@ -70,15 +73,20 @@ OVERLAP_MIN_M = 0.10       # 새 경로와 믿은 경로의 점 구간(x)이 이
 JUMP_M = 0.10
 OUTLIER_HOLD_SEC = 0.5
 REF_MAX_AGE_SEC = 1.0      # 믿은 경로가 이보다 오래됐으면 비교하지 않음
-FAR_ONLY_XMIN_M = 0.8
+FAR_ONLY_XMIN_M = 0.7
 CROSS_CLASSES = ("crosswalk_marking", "stop_line")
 CROSS_MIN_SCORE = 0.5
 CROSS_RECENT_SEC = 0.5
 CROSS_HOLD_MAX_SEC = 0.5
 TUNE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
 LANE_FILE = TUNE_DIR + "/lane"            # 달릴 차선 1 또는 2 (car.sh lane, tune_gui 가 씀)
-TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec 만 읽음
+TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec, obstacle_dist_m 만 읽음
 LANE_CHANGE_SEC = 2.0                     # tune.json 에 없을 때
+OBSTACLE_DIST_M = 2.0                     # tune.json 에 없을 때. 0 = 장애물 피하기 끔
+CAR_MIN_SCORE = 0.5                       # 장애물 차 최소 확신도
+BUMPER_X_M = -0.30                        # 앞범퍼의 경로 x (x 0 = 카메라 바로 아래에서 0.84 m 앞, 렌즈는 범퍼 0.544 m 뒤)
+OBSTACLE_FRAMES = 3                       # 내 차선 장애물이 이만큼 연달아 보여야 차선 변경 (한 장 잘못 잡은 것 무시)
+OBSTACLE_MARGIN_M = 0.10                  # 장애물이 경계에서 이보다 가까우면(선 위) 어느 차선인지 정하지 않음
 
 
 def run_edges(mask, gap=3):
@@ -142,6 +150,44 @@ def nearest(ys, target):
     return min(ys, key=lambda v: abs(v - target))
 
 
+def offset_from(O, P):
+    """선 하나의 바닥 점들 P 를 주된 방향의 직선으로 보고 → (O 가 그 직선에서 왼쪽으로 떨어진 수직 거리 m (+ 왼쪽),
+    선을 따라 잰 P 가운데 ~ O 거리 m)."""
+    v = direction(P)
+    v = -v if v[0] < 0 else v                    # 앞쪽을 향하게
+    d = O - P.mean(axis=0)
+    return float(v[0] * d[1] - v[1] * d[0]), float(abs(v @ d))
+
+
+def lane_of(O, dashes, solids, rules):
+    """바닥 점 O 가 몇 차선인가. 두 가지로 보고, 둘 다 답이 있는데 다르면 None.
+    - 점선(1·2차선 경계) 조각 중 선을 따라 1 m 안에서 가장 가까운 것: 그 왼쪽 = 1, 오른쪽 = 2
+    - 내 차선 실선(점선 반대쪽: 2차선이면 오른쪽, 1차선이면 왼쪽 안쪽 실선)의 O 근처(앞뒤 0.5 m) 부분: 거기서 차로 폭 안이면 내 차선, 넘으면 옆 차선
+      (커브에서 점선이 화면 밖으로 나가거나 장애물에 가려도 이 실선은 장애물 옆에 보일 때가 많음)
+    선에서 10 cm 안(선에 걸침)이면 그 판단은 버림."""
+    votes = set()
+    near = [(s, along) for s, along in (offset_from(O, P) for P in dashes) if along < 1.0 and abs(s) < 1.2]
+    if near:
+        s = min(near, key=lambda sa: sa[1])[0]
+        if abs(s) >= OBSTACLE_MARGIN_M:
+            votes.add(1 if s > 0 else 2)
+    sg = 1 if rules == 2 else -1                 # 내 차선 실선에서 O 까지 (+ = 차로 안쪽)
+    gaps = []
+    for P in solids:
+        P = P[np.abs(P[:, 0] - O[0]) < 0.5]
+        if len(P) < 4:
+            continue
+        v = direction(P)
+        if math.degrees(math.atan2(abs(v[1]), abs(v[0]))) > TRANSVERSE_DEG:
+            continue                             # 가로선(정지선 등)
+        g = sg * offset_from(O, P)[0]
+        if 0 < g < 2 * LANE_WIDTH_M:
+            gaps.append(g)
+    if gaps and abs(min(gaps) - LANE_WIDTH_M) >= OBSTACLE_MARGIN_M:
+        votes.add(rules if min(gaps) < LANE_WIDTH_M else 3 - rules)
+    return votes.pop() if len(votes) == 1 else None
+
+
 def read_file(path, mtime, cast):
     """파일이 바뀌었으면 (mtime, 값), 그대로이거나 못 읽으면 (mtime, None)."""
     try:
@@ -162,6 +208,7 @@ class Lane:
         self.lane_file, self.tune_file = LANE_FILE, TUNE_FILE
         self.lane_mt = self.tune_mt = None
         self.sec = LANE_CHANGE_SEC
+        self.obstacle_dist = OBSTACLE_DIST_M
         self.update(time.time())
         self.rules = self.want; self.change = None   # 시작할 때는 옮기지 않고 바로 그 차선
 
@@ -177,9 +224,10 @@ class Lane:
         self.lane_mt, v = read_file(self.lane_file, self.lane_mt, lambda s: int(s.strip()))
         if v in (1, 2):
             self.want = v
-        self.tune_mt, v = read_file(self.tune_file, self.tune_mt, lambda s: float(json.loads(s).get("lane_change_sec", LANE_CHANGE_SEC)))
+        self.tune_mt, v = read_file(self.tune_file, self.tune_mt, json.loads)
         if v is not None:
-            self.sec = v
+            self.sec = float(v.get("lane_change_sec", LANE_CHANGE_SEC))
+            self.obstacle_dist = float(v.get("obstacle_dist_m", OBSTACLE_DIST_M))
         goal = self.change[3] if self.change else self.rules
         if self.want != goal:                     # 새 요청 또는 변경 도중 되돌리기
             o1 = 0.0 if self.want == self.rules else (LANE_WIDTH_M if self.want == 1 else -LANE_WIDTH_M)
@@ -191,6 +239,12 @@ class Lane:
                 self.log("lane %d" % self.rules)
             self.change = None
         return self.offset_at(now)
+
+    def request(self, n):
+        """다른 차선 요청: 키 1/2 처럼 차선 파일에 쓴다 (다음 프레임에 읽어서 변경 시작, tune_gui 표시도 바뀜)."""
+        with open(self.lane_file + ".tmp", "w") as f:
+            f.write("%d\n" % n)
+        os.replace(self.lane_file + ".tmp", self.lane_file)
 
 
 class LanePathNode(Node):
@@ -207,8 +261,10 @@ class LanePathNode(Node):
         self.ref = None; self.ref_band = None; self.ref_time = 0.0              # 믿은 경로
         self.outlier_since = None; self.search_start = None
         self.cross_seen = 0.0; self.cross_hold_since = None
+        self.obstacle_n = 0                                                     # 내 차선 장애물이 연달아 보인 프레임 수
         self.stats = dict.fromkeys(["frames", "ok", "both", "one_side", "held", "search", "transverse_dropped",
-                                    "outlier_held", "outlier_accepted", "far_only_held", "cross_held", "dash_joined"], 0)
+                                    "outlier_held", "outlier_accepted", "far_only_held", "cross_held", "dash_joined",
+                                    "obstacle_change"], 0)
         self.last_reason = ""
         self.create_timer(2.0, self.log_stats)
 
@@ -246,7 +302,9 @@ class LanePathNode(Node):
         ms = np.zeros((h, w), np.uint8)    # 실선
         lines = [(d.class_name, np.array([[p.x, p.y] for p in d.mask.data], np.float32)) for d in msg.detections
                  if d.class_name in ("solid_line", "dashed_line") and d.score >= MIN_SCORE and d.mask.data]
-        dashes = [g for g in (self.ground(poly) for c, poly in lines if c == "dashed_line") if g is not None and g[3] >= DASH_ELONG]
+        g_lines = [(c, g) for c, g in ((c, self.ground(poly)) for c, poly in lines) if g is not None]
+        dashes = [g for c, g in g_lines if c == "dashed_line" and g[3] >= DASH_ELONG]
+        self.check_obstacle(msg, [g[0] for c, g in g_lines if c == "dashed_line"], [g[0] for c, g in g_lines if c == "solid_line"])
         for c, poly in lines:
             if c == "solid_line" and self.is_transverse(poly, dashes):
                 self.stats["transverse_dropped"] += 1
@@ -267,6 +325,30 @@ class LanePathNode(Node):
         self.stats["ok"] += 1
         self.last_traj, self.last_band, self.last_ok_time = traj, band, time.time()
         self.publish(traj, band, shape)
+
+    def check_obstacle(self, msg, dashes, solids):
+        """서 있는 장애물 차가 내 차선에서 앞범퍼부터 obstacle_dist_m 안에 OBSTACLE_FRAMES 번 연달아 보이면 옆 차선 요청.
+        차 위치 = 박스 맨 아래 가운데 (바퀴가 바닥에 닿는 곳). 차선 변경 중엔 보지 않음."""
+        dist = self.lane.obstacle_dist
+        if dist <= 0 or self.lane.change is not None:
+            self.obstacle_n = 0
+            return
+        near = None
+        for d in msg.detections:
+            if d.class_name != "car" or d.score < CAR_MIN_SCORE or not d.mask.data:
+                continue
+            P = np.array([[p.x, p.y] for p in d.mask.data], np.float32)
+            xs, ys = self.ipm.to_m(np.array([0.5 * (P[:, 0].min() + P[:, 0].max())]), np.array([P[:, 1].max()]))
+            ahead = float(xs[0]) - BUMPER_X_M
+            if ahead <= dist and lane_of(np.array([xs[0], ys[0]], float), dashes, solids, self.lane.rules) == self.lane.rules:
+                near = ahead if near is None else min(near, ahead)
+        self.obstacle_n = self.obstacle_n + 1 if near is not None else 0
+        if self.obstacle_n >= OBSTACLE_FRAMES:
+            to = 1 if self.lane.rules == 2 else 2
+            self.get_logger().info("obstacle in lane %d, %.2f m ahead -> lane %d" % (self.lane.rules, near, to))
+            self.lane.request(to)
+            self.stats["obstacle_change"] += 1
+            self.obstacle_n = 0
 
     def publish(self, traj, band, shape):
         """차선 변경 중이면 지금 옆 이동을 더해서 내보낸다 (계산·유지 판단은 모두 이동 없는 차선 기준)."""
@@ -504,10 +586,11 @@ class LanePathNode(Node):
     def log_stats(self):
         s = self.stats   # car_prep.sh / summarize_run.py 가 "frames=" 로 이 줄을 찾는다
         self.get_logger().info("frames=%d ok=%d (both %d, one_side %d, search %d) held=%d transverse_dropped=%d "
-                               "outlier_held=%d outlier_accepted=%d far_only_held=%d cross_held=%d dash_joined=%d lane=%d last=%s"
+                               "outlier_held=%d outlier_accepted=%d far_only_held=%d cross_held=%d dash_joined=%d "
+                               "obstacle_change=%d lane=%d last=%s"
                                % (s["frames"], s["ok"], s["both"], s["one_side"], s["search"], s["held"],
                                   s["transverse_dropped"], s["outlier_held"], s["outlier_accepted"], s["far_only_held"],
-                                  s["cross_held"], s["dash_joined"], self.lane.rules, self.last_reason))
+                                  s["cross_held"], s["dash_joined"], s["obstacle_change"], self.lane.rules, self.last_reason))
 
 
 def main():

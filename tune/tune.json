@@ -1,15 +1,16 @@
 {
- "stanley_gain": 1.0,
+ "stanley_gain": 0.7,
  "heading_gain": 0.2,
  "vehicle_speed_mps": 0.5,
  "softening_speed_mps": 0.1,
- "curvature_gain": 0.2,
- "front_axle_offset_m": 0.18,
+ "curvature_gain": 0.0,
+ "front_axle_offset_m": 0.36,
  "max_steer_deg": 25.0,
  "i_gain": 0.04,
  "i_max_deg": 1.0,
  "i_curv_max": 0.3,
  "lane_timeout_sec": 0.6,
  "pwm": 255,
- "lane_change_sec": 2.0
+ "lane_change_sec": 2.0,
+ "obstacle_dist_m": 2.0
 }

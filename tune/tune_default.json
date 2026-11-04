@@ -11,5 +11,6 @@
  "i_curv_max": 0.3,
  "lane_timeout_sec": 0.3,
  "pwm": 240,
- "lane_change_sec": 2.0
+ "lane_change_sec": 2.0,
+ "obstacle_dist_m": 2.0
 }
