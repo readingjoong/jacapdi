@@ -1,7 +1,7 @@
 """/detections(선) + /lane_detections(lane 폴리곤) + /lane_trajectory + /topic_control_signal 시각화. q/Esc 종료.
 좌: 원본 + 선 마스크 + lane 영역 + IPM 사다리꼴 + 경로 역투영 / 우: BEV + 경로 곡선.
 IPM/미터 변환은 nodes/ipm.py (경로 노드와 같음)."""
-import sys, threading
+import os, sys, threading
 import cv2, numpy as np, rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -92,6 +92,7 @@ def render(v):
 def main():
     rclpy.init(); v = Viewer()
     win = "path viewer (q/Esc)"; cv2.namedWindow(win, cv2.WINDOW_NORMAL); cv2.resizeWindow(win, 1400, 720)
+    cv2.moveWindow(win, *(int(v) for v in os.environ.get("VIEW_POS", "0,0").split(",")))   # 화면 왼쪽 위 (tune_gui 는 그 아래)
     while True:
         for _ in range(5): rclpy.spin_once(v, timeout_sec=0.002)
         c = render(v)

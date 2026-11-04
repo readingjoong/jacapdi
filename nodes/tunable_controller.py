@@ -9,6 +9,10 @@
    - 내륜차 보상: 경로를 0.5·축간거리²·κ 만큼 커브 바깥으로 옮겨서 계산 (뒷바퀴가 안쪽 선을 밟지 않게)
    - I 항: 직선(|κ| < i_curv_max)이고 끝까지 꺾지 않았을 때만 쌓고 ±i_max_deg 에서 자름. 경로를 0.5 초 넘게 잃으면 0
    - 경로가 lane_timeout_sec 넘게 없으면 정지 명령
+   - 신호 정지: /detections 에서 빨간·노란불을 보고 횡단보도 줄무늬의 먼 쪽 끝(줄무늬마다 잰 것의 중앙값)이 앞범퍼에서
+     light_stop_dist_m 안에 들어오면 정지(PWM 0). 횡단보도 가까운 끝은 앞범퍼 0.65 m 부터 화면 밖이라 기준으로 못 씀,
+     먼 끝은 횡단보도 바로 앞에 서도 보임. 멈춘 뒤엔 초록불이 보일 때까지 유지.
+     초록불로 출발한 뒤 LIGHT_COOLDOWN_SEC 동안은 다시 멈추지 않음 (같은 횡단보도). 0 = 끔
 
 tune/tune.json (tune_gui.py 가 저장) 이 바뀌면 다음 주기(0.05 초)에 반영한다.
 tune/go_until (car_go.sh 가 쓰는 주행 끝 시각) 전에만 명령을 보낸다. 꺼지면 0.5 초 동안 정지 명령, 그 뒤엔 아무것도 안 보냄.
@@ -25,13 +29,21 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
-from interfaces_pkg.msg import LaneTrajectory, MotionCommand
+from interfaces_pkg.msg import DetectionArray, LaneTrajectory, MotionCommand
 
-D = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
+from ipm import Ipm
+
+D =os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
 TUNE, STATUS, GO = D + "/tune.json", D + "/status.json", D + "/go_until"
 STEER_MAX = 100          # 펌웨어 조향 명령 범위 ±100 (최대 조향의 1% 단위)
 WHEELBASE = 0.56         # 축간거리 m (앞축 -0.23, 뒷축 -0.79 실측)
 DT = 0.05                # 명령 주기 s
+LIGHT_STOP_DIST_M = 1.3  # tune.json 에 light_stop_dist_m 이 없을 때 (11/04 횡단보도 바로 앞에 선 장면에서 먼 끝 1.27 m)
+LIGHT_MIN_SCORE = 0.5    # 신호등·정지선 최소 확신도
+LIGHT_FRAMES = 3         # 같은 신호가 이만큼 연달아 보여야 바뀐 것으로 봄 (한 장 잘못 잡은 것 무시)
+LIGHT_FORGET_SEC = 1.0   # 신호등이 이만큼 안 보이면 색을 잊음 (멈춰 있을 때는 초록불이 보일 때까지 유지)
+LIGHT_COOLDOWN_SEC = 3.0
+BUMPER_X_M = -0.30       # 앞범퍼의 경로 x (lane_path_node 와 같음: x 0 = 카메라 바로 아래에서 0.84 m 앞, 렌즈는 범퍼 0.544 m 뒤)
 
 
 class Tunable(Node):
@@ -41,6 +53,13 @@ class Tunable(Node):
                        durability=DurabilityPolicy.VOLATILE, depth=1)
         self.pub = self.create_publisher(MotionCommand, "/topic_control_signal", q)
         self.create_subscription(LaneTrajectory, "/lane_trajectory", self.on_traj, q)
+        self.create_subscription(DetectionArray, "/detections", self.on_det, q)
+        self.ipm = Ipm()
+        self.light = None; self.light_t = 0.0     # 확정된 신호 ("stop" = 빨강·노랑, "go" = 초록) 와 마지막으로 본 시각
+        self.light_cand = (None, 0)               # (지금 보이는 신호, 연달아 본 횟수)
+        self.cross_far = None                     # 횡단보도 먼 끝까지 앞범퍼 거리 m (안 보이면 None)
+        self.hold = False                         # 신호 정지 중
+        self.cool_until = 0.0
         self.run = run
         self.p = None; self.mtime = 0.0
         self.traj = None; self.traj_t = None      # 마지막 정상 경로와 받은 시각
@@ -68,6 +87,36 @@ class Tunable(Node):
 
     def on_traj(self, m):
         self.traj, self.traj_t = (m, time.monotonic()) if m.valid else (None, None)
+
+    def on_det(self, msg):
+        """신호등 색을 정하고 횡단보도 먼 끝까지 거리를 재서 신호 정지를 판단한다."""
+        now = time.monotonic()
+        names = {d.class_name for d in msg.detections if d.score >= LIGHT_MIN_SCORE}
+        seen = "stop" if names & {"traffic_light_red", "traffic_light_yellow"} else "go" if "traffic_light_green" in names else None
+        if seen:
+            n = self.light_cand[1] + 1 if self.light_cand[0] == seen else 1
+            self.light_cand = (seen, n)
+            if n >= LIGHT_FRAMES:
+                self.light, self.light_t = seen, now
+        elif not self.hold and now - self.light_t > LIGHT_FORGET_SEC:
+            self.light = None
+        far = []                                                  # 줄무늬마다 먼 쪽 끝 (사진에서 가장 위 점)
+        for d in msg.detections:
+            if d.class_name == "crosswalk_marking" and d.score >= LIGHT_MIN_SCORE and d.mask.data:
+                self.ipm.setup(d.mask.height, d.mask.width)
+                P = np.array([[q.x, q.y] for q in d.mask.data], np.float32)
+                u, v = P[np.argmin(P[:, 1])]
+                far.append(float(self.ipm.to_m(np.array([u]), np.array([v]))[0][0]) - BUMPER_X_M)
+        self.cross_far = float(np.median(far)) if far else None   # 한두 줄 잘못 잡혀도 괜찮게 중앙값
+        limit = float(self.p.get("light_stop_dist_m", LIGHT_STOP_DIST_M))
+        if self.hold:
+            if self.light == "go":
+                self.hold = False; self.cool_until = now + LIGHT_COOLDOWN_SEC
+                self.get_logger().info("signal: green -> go")
+        elif (limit > 0 and self.light == "stop" and now > self.cool_until
+              and self.cross_far is not None and self.cross_far <= limit):
+            self.hold = True
+            self.get_logger().info("signal: red/yellow, crosswalk far end %.2f m ahead -> stop" % self.cross_far)
 
     def steer(self, p, t):
         """정상 경로 t → (조향 -100~100, 조향각 rad, 내륜차 보상으로 옮긴 거리 m)."""
@@ -97,7 +146,13 @@ class Tunable(Node):
         self.reload()
         p = self.p
         stale = self.traj is None or time.monotonic() - self.traj_t > p["lane_timeout_sec"]
-        if stale:
+        try:
+            go = time.time() < float(open(GO).read())
+        except (OSError, ValueError):
+            go = False
+        if not go:
+            self.hold = False                     # 주행이 끝나면 신호 정지도 풂 (다음 출발에 남지 않게)
+        if stale or self.hold:
             self.i_lost += DT
             if self.i_lost > 0.5:
                 self.i_acc = 0.0
@@ -106,10 +161,6 @@ class Tunable(Node):
             steer, delta, shift = self.steer(p, self.traj)
             pwm = int(np.clip(round(p["pwm"]), 0, 255))
         self.prev_steer = steer
-        try:
-            go = time.time() < float(open(GO).read())
-        except (OSError, ValueError):
-            go = False
         if go:
             self.zero_until = time.monotonic() + 0.5
             m = MotionCommand(); m.steering, m.left_speed, m.right_speed = steer, pwm, pwm
@@ -121,7 +172,8 @@ class Tunable(Node):
             st = {"time": time.time(), "steer": steer, "pwm": pwm, "valid": not stale,
                   "c": None if stale else round(self.traj.c, 3), "b": None if stale else round(self.traj.b, 3),
                   "shift": round(shift, 3), "delta_deg": None if delta is None else round(math.degrees(delta), 1),
-                  "i_deg": round(math.degrees(float(p["i_gain"]) * self.i_acc), 2), "go": go}
+                  "i_deg": round(math.degrees(float(p["i_gain"]) * self.i_acc), 2), "go": go,
+                  "light": self.light, "hold": self.hold, "cross_far": None if self.cross_far is None else round(self.cross_far, 2)}
             try:
                 with open(STATUS + ".tmp", "w") as f:
                     json.dump(st, f)

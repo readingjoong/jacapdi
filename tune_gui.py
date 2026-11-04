@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""주행 튜닝 슬라이더 (호스트에서 실행: python3 ~/jacapdi-docker/tune_gui.py, 글씨 크기: TUNE_UI_SCALE=2)
+"""주행 튜닝 슬라이더 (car_prep.sh 가 띄움. 따로: python3 ~/jacapdi-docker/tune_gui.py, 글씨 크기: TUNE_UI_SCALE=2, 창 위치: GUI_POS=x,y)
 슬라이더를 움직이면 tune/tune.json 에 저장되고, 컨테이너의 tunable_controller.py 가 0.05 초 안에 반영한다 (주행 중에도).
 위쪽 상태 줄 = 제어기가 0.2 초마다 쓰는 tune/status.json. 다른 곳에서 tune.json 을 바꾸면 슬라이더도 따라간다."""
 import json, os, time
@@ -8,6 +8,7 @@ from tkinter import ttk, filedialog
 import tkinter.font as tkfont
 
 UI = float(os.environ.get("TUNE_UI_SCALE", "1.5"))
+STATUS_WIDTH = 90          # 위쪽 상태 두 줄의 너비 (글자 수). 고정해야 값이 바뀔 때 창이 꿈틀거리지 않음
 DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tune")
 TUNE, DEFAULT, STATUS, LANE = DIR + "/tune.json", DIR + "/tune_default.json", DIR + "/status.json", DIR + "/lane"
 
@@ -27,6 +28,7 @@ SLIDERS = [
     ("pwm", "뒷바퀴 PWM", 0, 255, 5, "뒷바퀴 모터 힘 (0~255)"),
     ("lane_change_sec", "차선 변경 시간 (s)", 0.5, 4.0, 0.1, "차선을 바꿀 때 옆으로 0.85 m 옮기는 데 걸리는 시간. 짧으면 급하게 꺾음"),
     ("obstacle_dist_m", "장애물 피하기 거리 (m)", 0.0, 3.0, 0.1, "내 차선에 선 차가 앞범퍼에서 이 거리 안에 보이면 옆 차선으로 변경. 0 = 끔"),
+    ("light_stop_dist_m", "신호 정지 거리 (m)", 0.0, 2.5, 0.05, "빨간·노란불일 때 횡단보도 줄무늬 먼 쪽 끝이 앞범퍼에서 이 거리 안이면 정지, 초록불에 출발. 0 = 끔 (횡단보도 바로 앞 = 약 1.3)"),
 ]
 
 
@@ -41,8 +43,10 @@ class App:
         self.vals = {**load(DEFAULT), **(load(TUNE) if os.path.exists(TUNE) else {})}   # tune.json 에 없는 새 항목은 기본값
         self.vars = {}; self.pending = None; self.my_mtime = None
         top = ttk.Frame(root, padding=8); top.pack(fill="both", expand=True)
-        self.status = tk.StringVar(value="제어기 상태: 대기")
-        ttk.Label(top, textvariable=self.status, font=("TkFixedFont", int(11 * UI), "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        self.status = tk.StringVar(value="제어기 상태: 대기"); self.status2 = tk.StringVar(value="")
+        sf = ttk.Frame(top); sf.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        for var in (self.status, self.status2):        # 글자 수가 바뀌어도 창 너비가 안 바뀌게 너비 고정
+            ttk.Label(sf, textvariable=var, width=STATUS_WIDTH, anchor="w", font=("TkFixedFont", int(11 * UI), "bold")).pack(anchor="w")
         for i, (k, name, lo, hi, step, tip) in enumerate(SLIDERS):
             v = tk.DoubleVar(value=self.vals[k]); lab = ttk.Label(top, width=7)
             self.vars[k] = (v, lab, step)
@@ -119,16 +123,22 @@ class App:
         try:
             s = load(STATUS)
             if time.time() - s["time"] > 2:
-                self.status.set("제어기 상태: 응답 없음 (car_prep.sh 실행했는지 확인)")
+                self.status.set("제어기 상태: 응답 없음 (car_prep.sh 실행했는지 확인)"); self.status2.set("")
             else:
-                self.status.set("조향 %+d%%  PWM %3d  경로 %s  c=%s  b=%s  이동 %s  각도 %s°  I %s°" % (
-                    s["steer"], s["pwm"], "OK " if s["valid"] else "없음", s["c"], s["b"], s["shift"], s["delta_deg"], s["i_deg"]))
+                num = lambda v, f: "-" if v is None else f % v
+                self.status.set("조향 %+4d%%  PWM %3d  경로 %s  c=%6s  b=%6s  이동 %6s  각도 %6s°  I %5s°" % (
+                    s["steer"], s["pwm"], "OK " if s["valid"] else "없음", num(s["c"], "%.3f"), num(s["b"], "%.3f"),
+                    num(s["shift"], "%.3f"), num(s["delta_deg"], "%.1f"), num(s["i_deg"], "%.2f")))
+                self.status2.set("신호 %-5s  횡단보도 먼 끝 %5s m  %s" % (
+                    {"stop": "빨강/노랑", "go": "초록"}.get(s.get("light"), "-"), num(s.get("cross_far"), "%.2f"),
+                    "[신호 정지]" if s.get("hold") else ""))
         except (OSError, ValueError, KeyError):
-            self.status.set("제어기 상태: 대기 (status.json 없음)")
+            self.status.set("제어기 상태: 대기 (status.json 없음)"); self.status2.set("")
         self.root.after(200, self.poll)
 
 
 root = tk.Tk()
+root.geometry("+%s+%s" % tuple(os.environ.get("GUI_POS", "0,780").split(",")))   # path_viewer(왼쪽 위 1400x720) 바로 아래
 for _n in ("TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
     _f = tkfont.nametofont(_n); _f.configure(size=int(round(_f.cget("size") * UI)))   # 기본 글꼴 전부 UI 배 (음수 = 픽셀 단위, 부호 유지)
 App(root); root.mainloop()

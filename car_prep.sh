@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 전원 켠 뒤 한 번: 장치 확인 -> 컨테이너 -> 파이프라인(웹캠/YOLO/경로/제어기) -> 보드 모니터 + 송신기 -> 화면 -> 준비 확인
-# 사용: ~/jacapdi-docker/car_prep.sh          화면 끄기: VIEW=0, 1차선에서 출발: LANE=1
+# 사용: ~/jacapdi-docker/car_prep.sh          화면 끄기: VIEW=0, 슬라이더 끄기: GUI=0, 1차선에서 출발: LANE=1
+#       창 위치: VIEW_POS=x,y (기본 0,0 = 왼쪽 위), GUI_POS=x,y (기본 0,780 = 화면 아래)
 # 이 창에서 Ctrl+C / 창 닫기 = 전부 끄기. car.sh all/lap 처럼 다른 스크립트가 부를 땐 PREP_HOLD=0
 source "$(dirname "$0")/car.sh"
 say "1/6 장치 확인 (웹캠 C920, 아두이노) - 최대 30초 대기"
@@ -33,7 +34,6 @@ docker exec -d $C bash -c "RUN=$RUN CONF=$CONF bash $D/pipeline.sh > /tmp/pipeli
 for i in $(seq 20); do [ -f "$RUN/run_info.txt" ] && break; sleep 1; done
 [ -f "$RUN/run_info.txt" ] || die "파이프라인 시작 실패: docker exec $C cat /tmp/pipeline.log"
 echo "$RUN" > /tmp/car_run_dir
-say "   슬라이더: python3 ~/jacapdi-docker/tune_gui.py"
 
 say "4/6 보드 모니터 (펌웨어 확인, FAULT 기록) + 시리얼 송신기"
 docker exec -d $C python3 "$D/nodes/board_monitor.py" "$RUN/board.log"
@@ -47,8 +47,12 @@ if [ -n "$A" ] && { [ "$A" -lt 352 ] || [ "$A" -gt 599 ]; }; then
   printf '\033[1;31m[car]    !!! 조향 가변저항 값 %s = 비정상 (정상 352~599). 출발하면 펌웨어가 바로 모터를 끔 (adc_out_of_range).\n[car]    !!! 1023 = GND 선 빠짐/신호가 5V 에 닿음, 0 = 신호선 빠짐/GND 에 닿음. 배터리·USB 끄고 가변저항 배선 확인\033[0m\n' "$A"
 fi
 
-say "5/6 실시간 화면"
-[ "${VIEW:-1}" = 1 ] && docker exec -d $C bash -c "$CX; python3 $D/nodes/path_viewer.py > /tmp/viewer.log 2>&1"
+say "5/6 실시간 화면 (왼쪽 위) + 슬라이더 (그 아래)"
+[ "${VIEW:-1}" = 1 ] && docker exec -d -e VIEW_POS="${VIEW_POS:-0,0}" $C bash -c "$CX; python3 $D/nodes/path_viewer.py > /tmp/viewer.log 2>&1"
+if [ "${GUI:-1}" = 1 ]; then                      # 슬라이더는 호스트에서. 이미 떠 있으면 그대로 (car_prep 을 다시 해도 하나만)
+  pgrep -f "[p]ython3 .*tune_gui\.py" >/dev/null && say "   슬라이더 이미 떠 있음" \
+    || { GUI_POS="${GUI_POS:-0,780}" nohup python3 "$D/tune_gui.py" > /tmp/tune_gui.log 2>&1 & }
+fi
 
 say "6/6 YOLO/경로 준비 대기 (보통 20~30초)"
 for i in $(seq 60); do
