@@ -83,7 +83,7 @@ CROSS_HOLD_MAX_SEC = 0.5
 TUNE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
 LANE_FILE = TUNE_DIR + "/lane"            # 달릴 차선 1 또는 2 (car.sh lane, tune_gui 가 씀)
 TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec, obstacle_dist_m, lane1_outer 만 읽음
-STATUS_FILE = TUNE_DIR + "/status.json"   # 제어기 상태: PWM 0(신호 정지, 출발 전)이면 차선 변경 진행을 멈춤
+STATUS_FILE = TUNE_DIR + "/status.json"   # 제어기 상태: PWM 0, 신호 정지, 출발 스위치 꺼짐이면 차선 변경 진행을 멈춤
 LANE_CHANGE_SEC = 2.0                     # tune.json 에 없을 때
 OBSTACLE_DIST_M = 2.0                     # tune.json 에 없을 때. 0 = 장애물 피하기 끔
 CAR_MIN_SCORE = 0.5                       # 장애물 차 최소 확신도
@@ -222,7 +222,7 @@ class Lane:
         self.sec = LANE_CHANGE_SEC
         self.obstacle_dist = OBSTACLE_DIST_M
         self.lane1_outer = False
-        self.status_mt = None; self.stopped = False; self.last_now = None   # 제어기가 PWM 0 인가 (차선 변경 진행 멈춤)
+        self.status_mt = None; self.stopped = False; self.last_now = None   # 차가 서 있나: PWM 0, 신호 정지, 출발 전 (차선 변경 진행 멈춤)
         self.update(time.time())
         self.rules = self.want; self.change = None   # 시작할 때는 옮기지 않고 바로 그 차선
 
@@ -245,7 +245,7 @@ class Lane:
             self.lane1_outer = float(v.get("lane1_outer", 0)) >= 0.5
         self.status_mt, v = read_file(STATUS_FILE, self.status_mt, json.loads)
         if v is not None:
-            self.stopped = time.time() - float(v.get("time", 0)) < 1.0 and (int(v.get("pwm", 1)) == 0 or bool(v.get("hold")))
+            self.stopped = time.time() - float(v.get("time", 0)) < 1.0 and (int(v.get("pwm", 1)) == 0 or bool(v.get("hold")) or not v.get("go", True))
         if self.change and self.stopped and self.last_now is not None:   # 차가 서 있는 동안은 옆 이동을 진행하지 않음 (시간 기준 S자라 서 있으면 혼자 끝나 버림)
             t0, o0, o1, w = self.change; self.change = (t0 + (now - self.last_now), o0, o1, w)
         self.last_now = now
