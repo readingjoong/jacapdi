@@ -33,6 +33,7 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 | `nodes/yolov8_node.py` | 사진 → 선 검출 (YOLO 분할, GPU FP16) |
 | `nodes/serial_sender_node.py` | 명령 → 아두이노 시리얼 |
 | `nodes/ipm.py`, `config/ipm_c920.yaml` | 사진 픽셀 ↔ 바닥 미터 변환 (경로 노드, frame_logger, path_viewer 공용) |
+| `nodes/calib_ipm.py` | 카메라를 다시 달았을 때 `config/ipm_c920.yaml` 재보정 (렌즈 높이 실측 + 직선 2차선에서 pitch 풀기) |
 | `nodes/run_monitor.py`, `summarize_run.py`, `frame_logger.py`, `board_monitor.py`, `rate_probe.py`, `path_viewer.py`, `webcam_pub.py` | 기록·확인 |
 | `tune/` | 슬라이더 값, 기본값, 프리셋 |
 | `models/best.pt` | YOLO 모델 |

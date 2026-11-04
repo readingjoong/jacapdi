@@ -11,6 +11,9 @@ tune/status.json
 tune/go_until
 tune/lane
 *.tmp
+# IPM 재보정 확인 사진, 이전 보정 백업 (calib_ipm.py)
+config/ipm_check.png
+config/*.prev
 __pycache__/
 # 수동 주행으로 모은 학습 사진
 manual_drive/Collected_Datasets/

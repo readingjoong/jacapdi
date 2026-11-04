@@ -1,10 +1,10 @@
 # 카메라(C920) 사진 픽셀 → 바닥 미터 변환 (IPM). 읽는 곳: nodes/ipm.py
-# 2026-09-24 07:29:20 calib_pitch.py: f=560 h=0.607 pitch=17.00deg (rows 3837, lane width 0.847m). 전방 0.84~1.40m, 좌우 +-0.8m.
-ipm_src_points: [24.5, 303.2, 615.5, 303.2, 776.8, 431.2, -136.8, 431.2]   # 사진 속 바닥 사다리꼴 4점 (640x480 기준)
+# 2026-11-04 calib_ipm.py: f=540.4 h=0.705 pitch=6.75deg (카메라 12.5 cm 올리고 고개 듦. 직선 2차선 3회 측정, 먼 쪽 차로 폭 0.849~0.851m). 전방 0.84~1.40m, 좌우 +-0.8m. 사진 맨 아래 = 경로 x 0.35m
+ipm_src_points: [26.5, 436.5, 613.5, 436.5, 791.4, 594.4, -151.4, 594.4]   # 사진 속 바닥 사다리꼴 4점 (640x480 기준)
 ipm_src_base_width: 640.0
 ipm_src_base_height: 480.0
 ipm_dst_left_ratio: 0.3
 ipm_dst_right_ratio: 0.7
 bev_height_scale: 4.0
-lateral_meter_per_pixel: 0.00625
+lateral_meter_per_pixel: 0.006250
 longitudinal_meter_per_pixel: 0.0002918
