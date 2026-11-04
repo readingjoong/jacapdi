@@ -9,6 +9,7 @@
    - 평가 지점 x0: 2차선 front_axle_offset_m, 1차선 front_axle_offset_m_lane1 (없으면 front_axle_offset_m). 차선 = tune/lane.
      차선을 바꾸면 새 차선에 자리 잡을 때까지 두 값 중 큰 쪽, 그 뒤 lane_change_sec 동안 새 값으로 서서히 옮김. 11/05 가제보: 1차선 0.36 이면 반경 1.5~2.4 m 코너를 질러가 안쪽 실선 이탈,
      0.1 이면 이탈 없음 (2차선은 0.36 이 가장 나음). docs/gazebo_1105
+   - 차선 변경 중 감속: lane_change_pwm (0 = 끔) 이면 차선을 바꾼 뒤 새 차선에 자리 잡을 때까지 PWM 을 이 값 이하로
    - 내륜차 보상: 경로를 0.5·축간거리²·κ 만큼 커브 바깥으로 옮겨서 계산 (뒷바퀴가 안쪽 선을 밟지 않게)
    - I 항: 직선(|κ| < i_curv_max)이고 끝까지 꺾지 않았을 때만 쌓고 ±i_max_deg 에서 자름. 경로를 0.5 초 넘게 잃으면 0
    - 경로가 lane_timeout_sec 넘게 없으면 정지 명령
@@ -166,6 +167,10 @@ class Tunable(Node):
         self.x0 += float(np.clip(want - self.x0, -rate * DT, rate * DT)) if rate > 0 else want - self.x0
         return self.x0
 
+    def changing(self):
+        """차선을 바꾼 뒤 아직 새 차선에 자리 잡지 않았나 (eval_x 가 판단)."""
+        return time.monotonic() - self.lane_t < SETTLE_MAX_SEC and not self.settled
+
     def steer(self, p, t):
         """정상 경로 t → (조향 -100~100, 조향각 rad, 내륜차 보상으로 옮긴 거리 m)."""
         x = self.eval_x(p)
@@ -209,6 +214,9 @@ class Tunable(Node):
         else:
             steer, delta, shift = self.steer(p, self.traj)
             pwm = int(np.clip(round(p["pwm"]), 0, 255))
+            lc = int(p.get("lane_change_pwm", 0))
+            if lc > 0 and self.changing():
+                pwm = min(pwm, lc)                # 차선 변경 중 감속 (새 차선에 자리 잡을 때까지)
         self.prev_steer = steer
         if go:
             self.zero_until = time.monotonic() + 0.5
@@ -223,7 +231,7 @@ class Tunable(Node):
                   "shift": round(shift, 3), "delta_deg": None if delta is None else round(math.degrees(delta), 1),
                   "i_deg": round(math.degrees(float(p["i_gain"]) * self.i_acc), 2), "go": go,
                   "light": self.light, "hold": self.hold, "cross_far": None if self.cross_far is None else round(self.cross_far, 2),
-                  "lane": self.lane, "x0": None if self.x0 is None else round(self.x0, 3)}
+                  "lane": self.lane, "x0": None if self.x0 is None else round(self.x0, 3), "changing": self.changing()}
             try:
                 with open(STATUS + ".tmp", "w") as f:
                     json.dump(st, f)

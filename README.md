@@ -1,6 +1,6 @@
 # 자율주행캡스톤디자인 공유 저장소
 
-> 브랜치 `gazebo-1105` (11/05): main 11/04판 + 1차선 개선 (1차선 평가 지점 따로 `front_axle_offset_m_lane1`, 바깥 실선 기준 옵션 `lane1_outer`). 가제보 결과와 영상: [docs/gazebo_1105](docs/gazebo_1105/README.md). 실차 미검증.
+> 브랜치 `gazebo-1105` (11/05): main 11/04판 + 1차선 개선 (1차선 평가 지점 따로 `front_axle_offset_m_lane1`, 바깥 실선 기준 옵션 `lane1_outer`) + 장애물 차선 변경 논리 수정 (잘린 차 무시, 신호 정지 중 변경 멈춤, 변경 뒤 자리 잡고 판정, `lane_change_pwm`). 가제보 결과와 영상: [docs/gazebo_1105](docs/gazebo_1105/README.md). 실차 미검증.
 
 ## 주행
 

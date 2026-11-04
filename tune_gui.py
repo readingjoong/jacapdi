@@ -29,7 +29,8 @@ SLIDERS = [
     ("lane_timeout_sec", "경로 끊김 허용 (s)", 0.1, 1.0, 0.05, "이 시간 넘게 경로가 없으면 정지"),
     ("pwm", "뒷바퀴 PWM", 0, 255, 5, "뒷바퀴 모터 힘 (0~255)"),
     ("lane_change_sec", "차선 변경 시간 (s)", 0.5, 4.0, 0.1, "차선을 바꿀 때 옆으로 0.85 m 옮기는 데 걸리는 시간. 짧으면 급하게 꺾음"),
-    ("obstacle_dist_m", "장애물 피하기 거리 (m)", 0.0, 3.0, 0.1, "내 차선에 선 차가 앞범퍼에서 이 거리 안에 보이면 옆 차선으로 변경. 0 = 끔"),
+    ("lane_change_pwm", "차선 변경 중 PWM", 0, 255, 5, "차선을 바꾸는 동안(새 차선에 자리 잡을 때까지) 이 PWM 이하로. 0 = 끔"),
+    ("obstacle_dist_m", "장애물 피하기 거리 (m)", 0.0, 4.0, 0.1, "내 차선에 선 차가 앞범퍼에서 이 거리 안에 보이면 옆 차선으로 변경. 0 = 끔"),
     ("light_stop_dist_m", "신호 정지 거리 (m)", 0.0, 2.5, 0.05, "빨간·노란불일 때 횡단보도 줄무늬 먼 쪽 끝이 앞범퍼에서 이 거리 안이면 정지, 초록불에 출발. 0 = 끔 (횡단보도 바로 앞 = 약 1.3)"),
 ]
 
@@ -80,7 +81,7 @@ class App:
         self.pending = self.root.after(150, self.write)       # 드래그 중엔 0.15 초에 한 번만 저장
 
     def collect(self):
-        return {k: int(round(v.get())) if k in ("pwm", "lane1_outer") else round(float(v.get()), 3) for k, (v, _, _) in self.vars.items()}
+        return {k: int(round(v.get())) if k in ("pwm", "lane1_outer", "lane_change_pwm") else round(float(v.get()), 3) for k, (v, _, _) in self.vars.items()}
 
     def write(self):
         self.pending = None; self.vals = self.collect()

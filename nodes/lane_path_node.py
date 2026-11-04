@@ -7,7 +7,7 @@
 트랙: 2차로, 차로 폭 0.85 m. 2차선 = 왼쪽 점선 + 오른쪽 실선, 1차선 = 왼쪽 실선 + 오른쪽 점선.
 달릴 차선 = tune/lane 파일 (1 또는 2, 없으면 2). 주행 중에 바꾸면 (car.sh lane 1/2, tune_gui 버튼)
 지금 차선 경로에 옆 이동을 0 → ±0.85 m 까지 lane_change_sec(tune.json, 기본 2 초) 동안 S자로 더하고,
-다 옮기면 새 차선 규칙으로 바꾼다. 도중에 되돌리면 그 자리에서 다시 돌아온다.
+다 옮기면 새 차선 규칙으로 바꾼다. 도중에 되돌리면 그 자리에서 다시 돌아온다. 제어기가 PWM 0 이면(신호 정지) 옮기기를 멈춘다.
 서 있는 장애물 차(YOLO "car")가 내 차선에서 앞범퍼부터 obstacle_dist_m(tune.json, 슬라이더) 안에 보이면 옆 차선을
 같은 방식으로 요청한다 (tune/lane 에 씀). 몇 차선인지 = 차 박스 맨 아래 가운데가 근처 점선보다 왼쪽(1)인지 오른쪽(2)인지,
 또는 내 차선 실선(2차선: 오른쪽, 1차선: 왼쪽 안쪽 실선)에서 차로 폭 안인지 (lane_of).
@@ -83,12 +83,17 @@ CROSS_HOLD_MAX_SEC = 0.5
 TUNE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
 LANE_FILE = TUNE_DIR + "/lane"            # 달릴 차선 1 또는 2 (car.sh lane, tune_gui 가 씀)
 TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec, obstacle_dist_m, lane1_outer 만 읽음
+STATUS_FILE = TUNE_DIR + "/status.json"   # 제어기 상태: PWM 0(신호 정지, 출발 전)이면 차선 변경 진행을 멈춤
 LANE_CHANGE_SEC = 2.0                     # tune.json 에 없을 때
 OBSTACLE_DIST_M = 2.0                     # tune.json 에 없을 때. 0 = 장애물 피하기 끔
 CAR_MIN_SCORE = 0.5                       # 장애물 차 최소 확신도
 BUMPER_X_M = -0.30                        # 앞범퍼의 경로 x (x 0 = 카메라 바로 아래에서 0.84 m 앞, 렌즈는 범퍼 0.544 m 뒤)
 OBSTACLE_FRAMES = 3                       # 내 차선 장애물이 이만큼 연달아 보여야 차선 변경 (한 장 잘못 잡은 것 무시)
 OBSTACLE_MARGIN_M = 0.10                  # 장애물이 경계에서 이보다 가까우면(선 위) 어느 차선인지 정하지 않음
+EDGE_PX = 3                               # 장애물 차 마스크가 화면 끝에서 이 픽셀 안이면 잘린 것
+SIDE_CUT_AHEAD_M = 1.5                    # 이보다 가까운데 화면 옆에 잘린 차는 무시 (11/05 가제보: 차선 변경 직후 옆 차를 내 차선으로 오판)
+SETTLE_C_M, SETTLE_B = 0.15, 0.2          # 차선 변경 뒤 경로 옆 오차·방향이 이 안에 들어와야 장애물을 다시 봄 (아직 옛 차선에 걸쳐 있으면 옆 차를 내 차선으로 오판)
+SETTLE_WAIT_MAX_SEC = 4.0                 # 그래도 이 시간 지나면 다시 봄
 # 1차선 바깥 실선 기준 (tune.json lane1_outer: 0 = 원래대로 점선, 1 = 점선 대신 2차선 바깥 실선. 11/05 가제보 docs/gazebo_1105)
 DASH_LINE_W_M = 0.05                      # 점선 폭 (트랙 도면)
 OUTER_W_M = 2 * LANE_WIDTH_M + DASH_LINE_W_M   # 1차선 안쪽 실선 안쪽 끝 ~ 바깥 실선 안쪽 끝 1.75 m
@@ -217,6 +222,7 @@ class Lane:
         self.sec = LANE_CHANGE_SEC
         self.obstacle_dist = OBSTACLE_DIST_M
         self.lane1_outer = False
+        self.status_mt = None; self.stopped = False; self.last_now = None   # 제어기가 PWM 0 인가 (차선 변경 진행 멈춤)
         self.update(time.time())
         self.rules = self.want; self.change = None   # 시작할 때는 옮기지 않고 바로 그 차선
 
@@ -237,6 +243,12 @@ class Lane:
             self.sec = float(v.get("lane_change_sec", LANE_CHANGE_SEC))
             self.obstacle_dist = float(v.get("obstacle_dist_m", OBSTACLE_DIST_M))
             self.lane1_outer = float(v.get("lane1_outer", 0)) >= 0.5
+        self.status_mt, v = read_file(STATUS_FILE, self.status_mt, json.loads)
+        if v is not None:
+            self.stopped = time.time() - float(v.get("time", 0)) < 1.0 and (int(v.get("pwm", 1)) == 0 or bool(v.get("hold")))
+        if self.change and self.stopped and self.last_now is not None:   # 차가 서 있는 동안은 옆 이동을 진행하지 않음 (시간 기준 S자라 서 있으면 혼자 끝나 버림)
+            t0, o0, o1, w = self.change; self.change = (t0 + (now - self.last_now), o0, o1, w)
+        self.last_now = now
         goal = self.change[3] if self.change else self.rules
         if self.want != goal:                     # 새 요청 또는 변경 도중 되돌리기
             o1 = 0.0 if self.want == self.rules else (LANE_WIDTH_M if self.want == 1 else -LANE_WIDTH_M)
@@ -271,6 +283,7 @@ class LanePathNode(Node):
         self.outlier_since = None; self.search_start = None
         self.cross_seen = 0.0; self.cross_hold_since = None
         self.obstacle_n = 0                                                     # 내 차선 장애물이 연달아 보인 프레임 수
+        self.obstacle_wait = None                                               # 차선 변경을 마친 시각 (자리 잡을 때까지 장애물 판정 미룸)
         self.stats = dict.fromkeys(["frames", "ok", "both", "one_side", "held", "search", "transverse_dropped",
                                     "outlier_held", "outlier_accepted", "far_only_held", "cross_held", "dash_joined",
                                     "obstacle_change"], 0)
@@ -300,6 +313,7 @@ class LanePathNode(Node):
         self.off = self.lane.update(time.time())
         if self.lane.rules != rules:
             self.shift_held(LANE_WIDTH_M if self.lane.rules == 1 else -LANE_WIDTH_M)
+            self.obstacle_wait = time.time()      # 새 차선에 자리 잡을 때까지 장애물 판정 미룸
         age = (self.get_clock().now() - Time.from_msg(msg.header.stamp)).nanoseconds * 1e-9
         shape = next(((d.mask.height, d.mask.width) for d in msg.detections if d.mask.height > 0), None)
         if age > MAX_IMAGE_AGE_SEC or shape is None:
@@ -337,18 +351,29 @@ class LanePathNode(Node):
 
     def check_obstacle(self, msg, dashes, solids):
         """서 있는 장애물 차가 내 차선에서 앞범퍼부터 obstacle_dist_m 안에 OBSTACLE_FRAMES 번 연달아 보이면 옆 차선 요청.
-        차 위치 = 박스 맨 아래 가운데 (바퀴가 바닥에 닿는 곳). 차선 변경 중엔 보지 않음."""
+        차 위치 = 박스 맨 아래 가운데 (바퀴가 바닥에 닿는 곳). 차선 변경 중과 변경 직후 자리 잡기 전엔 보지 않음.
+        화면 아래나 (가까울 때) 옆에 잘린 차는 무시."""
         dist = self.lane.obstacle_dist
         if dist <= 0 or self.lane.change is not None:
             self.obstacle_n = 0
             return
+        if self.obstacle_wait is not None:       # 차선 변경 직후: 경로가 새 차선 가운데에 들어올 때까지 (최대 SETTLE_WAIT_MAX_SEC)
+            t = self.last_traj
+            if time.time() - self.obstacle_wait < SETTLE_WAIT_MAX_SEC and not (t is not None and abs(t.c) < SETTLE_C_M and abs(t.b) < SETTLE_B):
+                self.obstacle_n = 0
+                return
+            self.obstacle_wait = None
         near = None
         for d in msg.detections:
             if d.class_name != "car" or d.score < CAR_MIN_SCORE or not d.mask.data:
                 continue
             P = np.array([[p.x, p.y] for p in d.mask.data], np.float32)
+            if P[:, 1].max() >= d.mask.height - EDGE_PX:
+                continue                         # 화면 아래에 잘린 차: 바닥 닿는 곳이 안 보여 위치를 모름 (늘 0.65 m 로 잡혀 옆 차선 차를 내 차선으로 오판)
             xs, ys = self.ipm.to_m(np.array([0.5 * (P[:, 0].min() + P[:, 0].max())]), np.array([P[:, 1].max()]))
             ahead = float(xs[0]) - BUMPER_X_M
+            if ahead < SIDE_CUT_AHEAD_M and (P[:, 0].min() <= EDGE_PX or P[:, 0].max() >= d.mask.width - EDGE_PX):
+                continue                         # 가까이서 화면 옆에 잘린 차: 가운데가 치우쳐 차선 판정이 틀림 (이미 옆을 지나는 차)
             if ahead <= dist and lane_of(np.array([xs[0], ys[0]], float), dashes, solids, self.lane.rules) == self.lane.rules:
                 near = ahead if near is None else min(near, ahead)
         self.obstacle_n = self.obstacle_n + 1 if near is not None else 0
