@@ -11,6 +11,8 @@
 서 있는 장애물 차(YOLO "car")가 내 차선에서 앞범퍼부터 obstacle_dist_m(tune.json, 슬라이더) 안에 보이면 옆 차선을
 같은 방식으로 요청한다 (tune/lane 에 씀). 몇 차선인지 = 차 박스 맨 아래 가운데가 근처 점선보다 왼쪽(1)인지 오른쪽(2)인지,
 또는 내 차선 실선(2차선: 오른쪽, 1차선: 왼쪽 안쪽 실선)에서 차로 폭 안인지 (lane_of).
+1차선 바깥 실선 기준(tune.json lane1_outer 1, 기본 0): 1차선에서 점선 대신 2차선 바깥 실선 안쪽 끝에서 수직 1.325 m 안쪽을
+가운데로 쓴다 (안쪽 실선이 보이면 안쪽 실선 우선, 두 실선 다 없으면 원래 계산). find_path_outer
 
 한 프레임 (아래 설명은 2차선 기준. 1차선은 좌우를 뒤집어서 같은 계산)
  1. 사진이 0.3 초 넘게 늦었거나 마스크가 없으면 실패 (6)
@@ -80,13 +82,18 @@ CROSS_RECENT_SEC = 0.5
 CROSS_HOLD_MAX_SEC = 0.5
 TUNE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
 LANE_FILE = TUNE_DIR + "/lane"            # 달릴 차선 1 또는 2 (car.sh lane, tune_gui 가 씀)
-TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec, obstacle_dist_m 만 읽음
+TUNE_FILE = TUNE_DIR + "/tune.json"       # lane_change_sec, obstacle_dist_m, lane1_outer 만 읽음
 LANE_CHANGE_SEC = 2.0                     # tune.json 에 없을 때
 OBSTACLE_DIST_M = 2.0                     # tune.json 에 없을 때. 0 = 장애물 피하기 끔
 CAR_MIN_SCORE = 0.5                       # 장애물 차 최소 확신도
 BUMPER_X_M = -0.30                        # 앞범퍼의 경로 x (x 0 = 카메라 바로 아래에서 0.84 m 앞, 렌즈는 범퍼 0.544 m 뒤)
 OBSTACLE_FRAMES = 3                       # 내 차선 장애물이 이만큼 연달아 보여야 차선 변경 (한 장 잘못 잡은 것 무시)
 OBSTACLE_MARGIN_M = 0.10                  # 장애물이 경계에서 이보다 가까우면(선 위) 어느 차선인지 정하지 않음
+# 1차선 바깥 실선 기준 (tune.json lane1_outer: 0 = 원래대로 점선, 1 = 점선 대신 2차선 바깥 실선. 11/05 가제보 docs/gazebo_1105)
+DASH_LINE_W_M = 0.05                      # 점선 폭 (트랙 도면)
+OUTER_W_M = 2 * LANE_WIDTH_M + DASH_LINE_W_M   # 1차선 안쪽 실선 안쪽 끝 ~ 바깥 실선 안쪽 끝 1.75 m
+OUTER_OFF_M = OUTER_W_M - HALF            # 바깥 실선 안쪽 끝 → 1차선 가운데 1.325 m
+OUTER_START = (0.8, 2.3)                  # 바깥 실선 새 선은 차 오른쪽 이 거리(m) 에서만 시작
 
 
 def run_edges(mask, gap=3):
@@ -209,6 +216,7 @@ class Lane:
         self.lane_mt = self.tune_mt = None
         self.sec = LANE_CHANGE_SEC
         self.obstacle_dist = OBSTACLE_DIST_M
+        self.lane1_outer = False
         self.update(time.time())
         self.rules = self.want; self.change = None   # 시작할 때는 옮기지 않고 바로 그 차선
 
@@ -228,6 +236,7 @@ class Lane:
         if v is not None:
             self.sec = float(v.get("lane_change_sec", LANE_CHANGE_SEC))
             self.obstacle_dist = float(v.get("obstacle_dist_m", OBSTACLE_DIST_M))
+            self.lane1_outer = float(v.get("lane1_outer", 0)) >= 0.5
         goal = self.change[3] if self.change else self.rules
         if self.want != goal:                     # 새 요청 또는 변경 도중 되돌리기
             o1 = 0.0 if self.want == self.rules else (LANE_WIDTH_M if self.want == 1 else -LANE_WIDTH_M)
@@ -432,7 +441,87 @@ class LanePathNode(Node):
             best = max(inner, key=lambda gc: gc[0])[1]
         return best
 
+    def outer_rows(self, ms, yl):
+        """1차선에서 2차선 바깥 실선의 안쪽 끝 (실선 구간의 왼쪽 끝) 을 줄마다 아랫줄과 15 cm 안으로 이어 가장 긴 선 → [(x, y)] (y 는 뒤집은 좌표).
+        새 선은 차 오른쪽 OUTER_START 에서만 시작 (안쪽 실선·점선과 섞이지 않게). 커브에서 차 앞을 가로질러 휘어도 이어서 따라감."""
+        sr, sc = np.nonzero(run_edges(ms[self.row_idx] > 0)[0])
+        sk = np.searchsorted(sr, np.arange(len(self.rows) + 1))
+        chains = []                              # [마지막 y, [(x, y)]]
+        for i, (row, xf0) in enumerate(self.rows):
+            ys = -yl[row, sc[sk[i]:sk[i + 1]]]
+            took = set()
+            for c in chains:
+                cand = [(abs(v - c[0]), k) for k, v in enumerate(ys) if k not in took and abs(v - c[0]) < 0.15]
+                if cand:
+                    k = min(cand)[1]; took.add(k); c[0] = ys[k]; c[1].append((xf0, float(ys[k])))
+            chains += [[v, [(xf0, float(v))]] for k, v in enumerate(ys) if k not in took and OUTER_START[0] < v < OUTER_START[1]]
+        chains = [c[1] for c in chains if len(c[1]) >= MIN_CHAIN_ROWS]
+        return max(chains, key=len) if chains else []
+
+    @staticmethod
+    def offset_center(f, x, d):
+        """선 f 에서 오른쪽(뒤집은 좌표 -y)으로 수직 d m 떨어진 곡선을 격자 x 위 값으로 (곡선 기준이라 x 도 움직임). 범위 밖은 nan."""
+        xs = x[f.covers(x)]
+        if len(xs) < 2:
+            return np.full(len(x), np.nan)
+        s = np.polyval(f.dcoef, xs); k = np.sqrt(1.0 + s * s)
+        px, py = xs + d * s / k, f.y(xs) - d / k
+        o = np.argsort(px); px, py = px[o], py[o]
+        return np.where((x >= px[0]) & (x <= px[-1]), np.interp(x, px, py), np.nan)
+
     def find_path(self, md, ms, header, mirror=False):
+        if mirror and self.lane.lane1_outer:
+            return self.find_path_outer(md, ms, header)
+        return self.find_path_orig(md, ms, header, mirror)
+
+    def find_path_outer(self, md, ms, header):
+        """1차선 (lane1_outer 1): 안쪽 실선 + 2차선 바깥 실선(1.75 m 오른쪽)으로 가운데를 잡고, 둘 다 없을 때만 점선 (원래 계산).
+        두 실선이 다 있고 폭이 맞으면 안쪽 실선에서 0.425 m, 아니면 있는 실선 하나 기준."""
+        yl = self.ipm.yl
+        sr, sc = np.nonzero(run_edges(ms[self.row_idx] > 0)[1])
+        sk = np.searchsorted(sr, np.arange(len(self.rows) + 1))
+        solid = self.solid_rows(sc, sk, yl, True)
+        R = [(xf0, float(solid[i])) for i, (row, xf0) in enumerate(self.rows) if i in solid]
+        Q = self.outer_rows(ms, yl)
+        fs, fo = fit_line(R), fit_line(Q)
+        if fo is None:
+            t, band, reason = self.find_path_orig(md, ms, header, True)
+            return t, band, reason if reason.startswith(("search", "too_few", "short", "bad")) else "noouter:" + reason
+        self.search_start = None
+        xs_all = [p[0] for p in (R if fs else [])] + [p[0] for p in Q]
+        x = np.arange(min(xs_all) - 1.4, max(xs_all) + 1e-9, 0.02)      # 바깥 실선에서 옮긴 점은 x 가 1.3 m 까지 앞뒤로 움직임
+        x = x[x >= self.rows[0][1] - 1e-6]
+        y_o = self.offset_center(fo, x, OUTER_OFF_M)
+        o_ok = np.isfinite(y_o)
+        s_ok = fs.covers(x) if fs else np.zeros(len(x), bool)
+        y_s = fs.y(x) + HALF * fs.k(x) if fs else np.zeros(len(x))
+        both = s_ok & o_ok & (np.abs(np.where(o_ok, y_o, 0.0) - y_s) < WIDTH_TOL_M)
+        yc = np.where(both, y_s, np.where(s_ok, y_s, np.where(o_ok, y_o, 0.0)))
+        keep = s_ok | o_ok
+        if keep.sum() < 8:
+            return None, None, "too_few_points(%d)" % keep.sum()
+        P = np.c_[x[keep], yc[keep]]
+        sel = P[P[:, 0] <= NEAR_RANGE_M]; used = "near"
+        if len(sel) < 15 or np.ptp(sel[:, 0]) < 0.15:
+            sel = P; used = "ext"
+        if len(sel) < 8 or np.ptp(sel[:, 0]) < 0.08:
+            return None, None, "short_span"
+        c = np.polyfit(sel[:, 0], sel[:, 1], 2 if np.ptp(sel[:, 0]) >= 0.3 else 1)
+        if len(c) == 2: c = np.array([0.0, c[0], c[1]])
+        err = float(np.sqrt(np.mean((np.polyval(c, sel[:, 0]) - sel[:, 1]) ** 2)))
+        if not np.all(np.isfinite(c)) or err > 0.15:
+            return None, None, "bad_fit(%.2f)" % err
+        c = -c
+        t = LaneTrajectory(); t.header = header; t.valid = True
+        t.a, t.b, t.c = float(c[0]), float(c[1]), float(c[2])
+        t.x_min_m, t.x_max_m = float(sel[:, 0].min()), float(sel[:, 0].max())
+        t.fit_error_m, t.num_points = err, int(len(sel))
+        bx = np.linspace(t.x_min_m, t.x_max_m, 12); by = np.polyval(c, bx)
+        band = self.ipm.to_px(np.r_[bx, bx[::-1]], np.r_[by + HALF, by[::-1] - HALF])
+        kind = "solid+outer" if both.any() or ((s_ok & keep).any() and (o_ok & ~s_ok).any()) else ("solid_only" if s_ok.any() else "outer_only")
+        return t, [(float(a), float(b)) for a, b in band], "%s,%s" % (kind, used)
+
+    def find_path_orig(self, md, ms, header, mirror=False):
         """mirror (1차선): 실선은 구간의 오른쪽 끝, 점선은 왼쪽 끝을 쓰고 옆 좌표 부호를 바꿔 2차선과 같은 계산 → 결과를 다시 뒤집음."""
         yl = self.ipm.yl
         n = len(self.rows)

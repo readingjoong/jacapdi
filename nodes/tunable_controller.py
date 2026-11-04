@@ -3,9 +3,12 @@
 조정형 Stanley 제어기:  /lane_trajectory (y = a·x² + b·x + c)  →  /topic_control_signal (조향 -100~100, 왼쪽/오른쪽 PWM)
 
    δ = heading_gain·atan(y'(x0)) + atan(stanley_gain·y(x0) / (vehicle_speed_mps + softening_speed_mps))
-       + curvature_gain·κ(x0) + i_gain·∫y(x0)dt                                   (x0 = front_axle_offset_m)
+       + curvature_gain·κ(x0) + i_gain·∫y(x0)dt                                   (x0 = 평가 지점, 아래)
    조향 = -100 · δ / max_steer_deg   (펌웨어: + 오른쪽. 경로 각도는 + 왼쪽이라 부호가 반대)
 
+   - 평가 지점 x0: 2차선 front_axle_offset_m, 1차선 front_axle_offset_m_lane1 (없으면 front_axle_offset_m). 차선 = tune/lane.
+     차선을 바꾸면 새 차선에 자리 잡을 때까지 두 값 중 큰 쪽, 그 뒤 lane_change_sec 동안 새 값으로 서서히 옮김. 11/05 가제보: 1차선 0.36 이면 반경 1.5~2.4 m 코너를 질러가 안쪽 실선 이탈,
+     0.1 이면 이탈 없음 (2차선은 0.36 이 가장 나음). docs/gazebo_1105
    - 내륜차 보상: 경로를 0.5·축간거리²·κ 만큼 커브 바깥으로 옮겨서 계산 (뒷바퀴가 안쪽 선을 밟지 않게)
    - I 항: 직선(|κ| < i_curv_max)이고 끝까지 꺾지 않았을 때만 쌓고 ±i_max_deg 에서 자름. 경로를 0.5 초 넘게 잃으면 0
    - 경로가 lane_timeout_sec 넘게 없으면 정지 명령
@@ -34,7 +37,7 @@ from interfaces_pkg.msg import DetectionArray, LaneTrajectory, MotionCommand
 from ipm import Ipm
 
 D =os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tune")
-TUNE, STATUS, GO = D + "/tune.json", D + "/status.json", D + "/go_until"
+TUNE, STATUS, GO, LANE = D + "/tune.json", D + "/status.json", D + "/go_until", D + "/lane"
 STEER_MAX = 100          # 펌웨어 조향 명령 범위 ±100 (최대 조향의 1% 단위)
 WHEELBASE = 0.56         # 축간거리 m (앞축 -0.23, 뒷축 -0.79 실측)
 DT = 0.05                # 명령 주기 s
@@ -44,6 +47,10 @@ LIGHT_FRAMES = 3         # 같은 신호가 이만큼 연달아 보여야 바뀐
 LIGHT_FORGET_SEC = 1.0   # 신호등이 이만큼 안 보이면 색을 잊음 (멈춰 있을 때는 초록불이 보일 때까지 유지)
 LIGHT_COOLDOWN_SEC = 3.0
 CROSS_MAX_M = 3.0        # 횡단보도 먼 끝으로 믿는 최대 거리 (앞범퍼 m). 이 밖이나 음수는 버림 (11/04 트랙 밖 오검출이 -15.8 m)
+SETTLE_C_M = 0.10        # 차선 변경 뒤 '자리 잡음' = 경로 옆 오차 |c| 이 안
+SETTLE_B = 0.15          # 그리고 경로 방향 |b| 이 안
+SETTLE_SEC = 0.5         # 이 시간 이어지면
+SETTLE_MAX_SEC = 6.0     # 차선을 바꾼 뒤 이 시간이 지나면 자리 잡았다고 봄
 BUMPER_X_M = -0.30       # 앞범퍼의 경로 x (lane_path_node 와 같음: x 0 = 카메라 바로 아래에서 0.84 m 앞, 렌즈는 범퍼 0.544 m 뒤)
 
 
@@ -70,6 +77,10 @@ class Tunable(Node):
         self.i_lost = 0.0                         # 경로 없던 시간 (s)
         self.zero_until = 0.0                     # 출발 스위치가 꺼진 뒤 이 시각까지 정지 명령
         self.n = 0
+        self.lane = 2; self.lane_mt = None         # 달릴 차선 (tune/lane, 경로 노드와 같은 파일)
+        self.lane_t = -1e9                        # 차선을 바꾼 시각 (monotonic)
+        self.settled = True; self.settle_n = 0     # 새 차선에 자리 잡았나 (그 전엔 평가 지점을 줄이지 않음)
+        self.x0 = None                            # 지금 평가 지점 (차선을 바꾸면 lane_change_sec 동안 새 값으로 옮김)
         self.reload(force=True)
         self.create_timer(DT, self.tick)
 
@@ -124,9 +135,40 @@ class Tunable(Node):
             self.hold = True
             self.get_logger().info("signal: red/yellow, crosswalk far end %.2f m ahead -> stop" % self.cross_far)
 
+    def eval_x(self, p):
+        """이 주기의 평가 지점. 차선별 값으로, 차선을 바꾸면 새 차선에 자리 잡을 때까지(경로 옆 오차 SETTLE_C_M, 방향 SETTLE_B 안이
+        SETTLE_SEC 이어짐, 최대 SETTLE_MAX_SEC) 두 값 중 큰 쪽(덜 민감)을 쓰고, 그 뒤 lane_change_sec 동안 일정한 빠르기로 새 값으로 옮긴다.
+        (11/05 가제보: 차가 아직 옮겨 가는 중에 0.1 로 줄이면 새 차선을 지나쳐 안쪽 실선을 넘음)"""
+        sec = max(float(p.get("lane_change_sec", 2.0)), 0.1)
+        try:
+            mt = os.path.getmtime(LANE)
+            if mt != self.lane_mt:
+                first = self.lane_mt is None
+                self.lane_mt = mt; v = int(open(LANE).read().strip())
+                if v in (1, 2) and v != self.lane:
+                    self.lane = v
+                    if not first: self.lane_t = time.monotonic(); self.settled = False; self.settle_n = 0
+        except (OSError, ValueError):
+            pass
+        x2 = float(p["front_axle_offset_m"]); x1 = float(p.get("front_axle_offset_m_lane1", x2))
+        want = x1 if self.lane == 1 else x2
+        if self.x0 is None:
+            self.x0 = want
+        now = time.monotonic()
+        if now - self.lane_t < SETTLE_MAX_SEC and not self.settled:
+            t = self.traj
+            ok = now - self.lane_t >= sec and t is not None and abs(t.c) < SETTLE_C_M and abs(t.b) < SETTLE_B
+            self.settle_n = self.settle_n + 1 if ok else 0
+            self.settled = self.settle_n * DT >= SETTLE_SEC
+            if not self.settled:
+                want = max(want, self.x0)
+        rate = abs(x2 - x1) / sec
+        self.x0 += float(np.clip(want - self.x0, -rate * DT, rate * DT)) if rate > 0 else want - self.x0
+        return self.x0
+
     def steer(self, p, t):
         """정상 경로 t → (조향 -100~100, 조향각 rad, 내륜차 보상으로 옮긴 거리 m)."""
-        x = float(p["front_axle_offset_m"])
+        x = self.eval_x(p)
         a, b = float(t.a), float(t.b)
         shift = -0.5 * WHEELBASE ** 2 * (2.0 * a / (1.0 + (2.0 * a * x + b) ** 2) ** 1.5)
         c = float(t.c + shift)
@@ -180,7 +222,8 @@ class Tunable(Node):
                   "c": None if stale else round(self.traj.c, 3), "b": None if stale else round(self.traj.b, 3),
                   "shift": round(shift, 3), "delta_deg": None if delta is None else round(math.degrees(delta), 1),
                   "i_deg": round(math.degrees(float(p["i_gain"]) * self.i_acc), 2), "go": go,
-                  "light": self.light, "hold": self.hold, "cross_far": None if self.cross_far is None else round(self.cross_far, 2)}
+                  "light": self.light, "hold": self.hold, "cross_far": None if self.cross_far is None else round(self.cross_far, 2),
+                  "lane": self.lane, "x0": None if self.x0 is None else round(self.x0, 3)}
             try:
                 with open(STATUS + ".tmp", "w") as f:
                     json.dump(st, f)

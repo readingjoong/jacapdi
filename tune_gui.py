@@ -19,7 +19,9 @@ SLIDERS = [
     ("vehicle_speed_mps", "속도 가정 (m/s)", 0.2, 3.0, 0.05, "Stanley 식의 속도. 크면 거리 오차 반응이 약해짐"),
     ("softening_speed_mps", "저속 완화 (m/s)", 0.05, 1.0, 0.05, "속도 가정에 더해지는 값 (저속에서 조향이 튀는 것 완화)"),
     ("curvature_gain", "곡률 보정", 0.0, 2.0, 0.05, "경로가 휘는 만큼 미리 조향 (커브 대응)"),
-    ("front_axle_offset_m", "평가 지점 (m)", -0.8, 0.8, 0.02, "경로를 평가하는 앞뒤 위치 (0 = 차 앞 약 0.84 m)"),
+    ("front_axle_offset_m", "평가 지점 (m)", -0.8, 0.8, 0.02, "경로를 평가하는 앞뒤 위치 (0 = 차 앞 약 0.84 m). 2차선에서 씀"),
+    ("front_axle_offset_m_lane1", "1차선 평가 지점 (m)", -0.8, 0.8, 0.02, "1차선에서 쓰는 평가 지점. 크면 급코너를 안쪽으로 질러감 (가제보: 0.36 안쪽 이탈, 0.1 이탈 없음)"),
+    ("lane1_outer", "1차선 바깥 실선 기준", 0, 1, 1, "1 = 1차선에서 점선 대신 2차선 바깥 실선으로 차로 가운데를 잡음 (안쪽 실선 우선). 0 = 원래대로"),
     ("max_steer_deg", "최대 조향각 (deg)", 10, 40, 1, "이 각도 = 끝까지(100%). 실측 바퀴 최대 25°. 작을수록 더 많이 꺾음"),
     ("i_gain", "I 게인", 0.0, 1.0, 0.02, "직선에서 한쪽으로 계속 벗어나 있으면 점점 더 꺾음. 0 = 끔"),
     ("i_max_deg", "I 최대 (deg)", 0.0, 8.0, 0.5, "I 항이 더하는 조향각 최대치"),
@@ -78,7 +80,7 @@ class App:
         self.pending = self.root.after(150, self.write)       # 드래그 중엔 0.15 초에 한 번만 저장
 
     def collect(self):
-        return {k: int(round(v.get())) if k == "pwm" else round(float(v.get()), 3) for k, (v, _, _) in self.vars.items()}
+        return {k: int(round(v.get())) if k in ("pwm", "lane1_outer") else round(float(v.get()), 3) for k, (v, _, _) in self.vars.items()}
 
     def write(self):
         self.pending = None; self.vals = self.collect()
@@ -129,9 +131,9 @@ class App:
                 self.status.set("조향 %+4d%%  PWM %3d  경로 %s  c=%6s  b=%6s  이동 %6s  각도 %6s°  I %5s°" % (
                     s["steer"], s["pwm"], "OK " if s["valid"] else "없음", num(s["c"], "%.3f"), num(s["b"], "%.3f"),
                     num(s["shift"], "%.3f"), num(s["delta_deg"], "%.1f"), num(s["i_deg"], "%.2f")))
-                self.status2.set("신호 %-5s  횡단보도 먼 끝 %5s m  %s" % (
+                self.status2.set("신호 %-5s  횡단보도 먼 끝 %5s m  평가 지점 %5s m (%s차선)  %s" % (
                     {"stop": "빨강/노랑", "go": "초록"}.get(s.get("light"), "-"), num(s.get("cross_far"), "%.2f"),
-                    "[신호 정지]" if s.get("hold") else ""))
+                    num(s.get("x0"), "%.2f"), s.get("lane", "-"), "[신호 정지]" if s.get("hold") else ""))
         except (OSError, ValueError, KeyError):
             self.status.set("제어기 상태: 대기 (status.json 없음)"); self.status2.set("")
         self.root.after(200, self.poll)

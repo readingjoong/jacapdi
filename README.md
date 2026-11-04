@@ -1,5 +1,7 @@
 # 자율주행캡스톤디자인 공유 저장소
 
+> 브랜치 `gazebo-1105` (11/05): main 11/04판 + 1차선 개선 (1차선 평가 지점 따로 `front_axle_offset_m_lane1`, 바깥 실선 기준 옵션 `lane1_outer`). 가제보 결과와 영상: [docs/gazebo_1105](docs/gazebo_1105/README.md). 실차 미검증.
+
 ## 주행
 
 ```bash
@@ -29,7 +31,7 @@ webcam_pub ─/image_raw─▶ yolov8_node ─/detections─▶ lane_path_node �
 | `car.sh` | 호스트: 공통 설정·함수(컨테이너 시작, 정지 명령, 송신기) + stop/all/lap/flash/shell |
 | `pipeline.sh` | 컨테이너 안: 웹캠/YOLO/경로/제어기/기록기 시작. `source pipeline.sh env` = ROS 환경만 |
 | `nodes/lane_path_node.py` | 선 마스크 → 차로 중앙 경로 곡선 (횡단보도·튐 대응, 차선 변경, 서 있는 장애물 차 피해 차선 변경 포함) |
-| `nodes/tunable_controller.py` | 경로 → 조향/PWM (Stanley + I 항 + 내륜차 보상, 출발 스위치). 설정 12개 = `tune/tune.json` |
+| `nodes/tunable_controller.py` | 경로 → 조향/PWM (Stanley + I 항 + 내륜차 보상, 출발 스위치, 차선별 평가 지점). 설정 = `tune/tune.json` |
 | `nodes/yolov8_node.py` | 사진 → 선 검출 (YOLO 분할, GPU FP16) |
 | `nodes/serial_sender_node.py` | 명령 → 아두이노 시리얼 |
 | `nodes/ipm.py`, `config/ipm_c920.yaml` | 사진 픽셀 ↔ 바닥 미터 변환 (경로 노드, frame_logger, path_viewer 공용) |
