@@ -2,6 +2,8 @@
 
 결과는 전부 **가제보 조건부**. 실차 미검증. 시험한 코드는 main `0a35a05` (11/04 카메라 재장착, car 인식 차선 변경, 신호 정지) 그대로이고, 바꾼 것은 표에 적은 tune.json 값과 `lane1_outer.patch`(바깥 실선안)뿐.
 
+> **개선 코드와 합친 영상은 브랜치 [`gazebo-1105`](https://github.com/readingjoong/jacapdi/tree/gazebo-1105/docs/gazebo_1105)** (main 11/04판 기준, 1차선 평가 지점 따로 + 바깥 실선 옵션). 이 폴더의 패치와 영상 7개는 그 전 시험 기록.
+
 ## 요약
 
 | 항목 | 결과 |
