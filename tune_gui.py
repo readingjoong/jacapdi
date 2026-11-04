@@ -60,12 +60,12 @@ class App:
         for n in (1, 2):
             ttk.Button(lane, text="%d차선" % n, command=lambda n=n: self.set_lane(n)).pack(side="left", padx=4)
         root.bind("1", lambda e: self.set_lane(1)); root.bind("2", lambda e: self.set_lane(2))   # 이 창에서 1 / 2 키
-        self.lane = tk.StringVar(); ttk.Label(lane, textvariable=self.lane, font=("TkDefaultFont", int(10 * UI), "bold")).pack(side="left", padx=8)
+        self.lane = tk.StringVar(); ttk.Label(lane, textvariable=self.lane, width=12, font=("TkDefaultFont", int(10 * UI), "bold")).pack(side="left", padx=8)
         btn = ttk.Frame(top); btn.grid(row=2 * len(SLIDERS) + 2, column=0, columnspan=3, pady=(8, 0), sticky="w")
         ttk.Button(btn, text="기본값", command=lambda: self.apply(load(DEFAULT))).pack(side="left")
         ttk.Button(btn, text="프리셋 저장", command=self.save_preset).pack(side="left", padx=6)
         ttk.Button(btn, text="프리셋 열기", command=self.open_preset).pack(side="left")
-        self.saved = tk.StringVar(); ttk.Label(btn, textvariable=self.saved, foreground="#2e7a4e").pack(side="left", padx=10)
+        self.saved = tk.StringVar(); ttk.Label(btn, textvariable=self.saved, width=32, foreground="#2e7a4e").pack(side="left", padx=10)
         self.poll()
 
     def fmt(self, k):
@@ -138,7 +138,9 @@ class App:
 
 
 root = tk.Tk()
-root.geometry("+%s+%s" % tuple(os.environ.get("GUI_POS", "0,780").split(",")))   # path_viewer(왼쪽 위 1400x720) 바로 아래
 for _n in ("TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
     _f = tkfont.nametofont(_n); _f.configure(size=int(round(_f.cget("size") * UI)))   # 기본 글꼴 전부 UI 배 (음수 = 픽셀 단위, 부호 유지)
-App(root); root.mainloop()
+App(root)
+root.update_idletasks()                           # 처음 크기로 창을 고정 (안의 글자가 바뀌어도 창이 꿈틀거리지 않게), 자리는 path_viewer 바로 아래
+root.geometry("%dx%d+%s+%s" % ((root.winfo_reqwidth() + 20, root.winfo_reqheight()) + tuple(os.environ.get("GUI_POS", "0,780").split(","))))
+root.mainloop()

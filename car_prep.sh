@@ -2,7 +2,7 @@
 # 전원 켠 뒤 한 번: 장치 확인 -> 컨테이너 -> 파이프라인(웹캠/YOLO/경로/제어기) -> 보드 모니터 + 송신기 -> 화면 -> 준비 확인
 # 사용: ~/jacapdi-docker/car_prep.sh          화면 끄기: VIEW=0, 슬라이더 끄기: GUI=0, 1차선에서 출발: LANE=1
 #       창 위치: VIEW_POS=x,y (기본 0,0 = 왼쪽 위), GUI_POS=x,y (기본 0,780 = 화면 아래)
-# 이 창에서 Ctrl+C / 창 닫기 = 전부 끄기. car.sh all/lap 처럼 다른 스크립트가 부를 땐 PREP_HOLD=0
+# 이 창에서 Ctrl+C / 창 닫기 = 전부 끄기 (슬라이더 창 포함). car.sh all/lap 처럼 다른 스크립트가 부를 땐 PREP_HOLD=0
 source "$(dirname "$0")/car.sh"
 say "1/6 장치 확인 (웹캠 C920, 아두이노) - 최대 30초 대기"
 for i in $(seq 30); do
@@ -49,9 +49,9 @@ fi
 
 say "5/6 실시간 화면 (왼쪽 위) + 슬라이더 (그 아래)"
 [ "${VIEW:-1}" = 1 ] && docker exec -d -e VIEW_POS="${VIEW_POS:-0,0}" $C bash -c "$CX; python3 $D/nodes/path_viewer.py > /tmp/viewer.log 2>&1"
-if [ "${GUI:-1}" = 1 ]; then                      # 슬라이더는 호스트에서. 이미 떠 있으면 그대로 (car_prep 을 다시 해도 하나만)
-  pgrep -f "[p]ython3 .*tune_gui\.py" >/dev/null && say "   슬라이더 이미 떠 있음" \
-    || { GUI_POS="${GUI_POS:-0,780}" nohup python3 "$D/tune_gui.py" > /tmp/tune_gui.log 2>&1 & }
+if [ "${GUI:-1}" = 1 ]; then                      # 슬라이더는 호스트에서. 떠 있던 것은 닫고 새로 (항상 최신 코드, 하나만)
+  pkill -f "[p]ython3 .*tune_gui\.py" 2>/dev/null
+  GUI_POS="${GUI_POS:-0,780}" nohup python3 "$D/tune_gui.py" > /tmp/tune_gui.log 2>&1 &
 fi
 
 say "6/6 YOLO/경로 준비 대기 (보통 20~30초)"

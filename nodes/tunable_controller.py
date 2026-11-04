@@ -43,6 +43,7 @@ LIGHT_MIN_SCORE = 0.5    # 신호등·정지선 최소 확신도
 LIGHT_FRAMES = 3         # 같은 신호가 이만큼 연달아 보여야 바뀐 것으로 봄 (한 장 잘못 잡은 것 무시)
 LIGHT_FORGET_SEC = 1.0   # 신호등이 이만큼 안 보이면 색을 잊음 (멈춰 있을 때는 초록불이 보일 때까지 유지)
 LIGHT_COOLDOWN_SEC = 3.0
+CROSS_MAX_M = 3.0        # 횡단보도 먼 끝으로 믿는 최대 거리 (앞범퍼 m). 이 밖이나 음수는 버림 (11/04 트랙 밖 오검출이 -15.8 m)
 BUMPER_X_M = -0.30       # 앞범퍼의 경로 x (lane_path_node 와 같음: x 0 = 카메라 바로 아래에서 0.84 m 앞, 렌즈는 범퍼 0.544 m 뒤)
 
 
@@ -60,6 +61,7 @@ class Tunable(Node):
         self.cross_far = None                     # 횡단보도 먼 끝까지 앞범퍼 거리 m (안 보이면 None)
         self.hold = False                         # 신호 정지 중
         self.cool_until = 0.0
+        self.go = False                           # 출발 스위치 (tick 이 갱신, on_det 은 주행 중일 때만 판단)
         self.run = run
         self.p = None; self.mtime = 0.0
         self.traj = None; self.traj_t = None      # 마지막 정상 경로와 받은 시각
@@ -106,9 +108,13 @@ class Tunable(Node):
                 self.ipm.setup(d.mask.height, d.mask.width)
                 P = np.array([[q.x, q.y] for q in d.mask.data], np.float32)
                 u, v = P[np.argmin(P[:, 1])]
-                far.append(float(self.ipm.to_m(np.array([u]), np.array([v]))[0][0]) - BUMPER_X_M)
+                dist = float(self.ipm.to_m(np.array([u]), np.array([v]))[0][0]) - BUMPER_X_M
+                if 0.0 < dist < CROSS_MAX_M:                      # 지평선 위·트랙 밖 오검출은 거리가 음수·엉뚱하게 나옴
+                    far.append(dist)
         self.cross_far = float(np.median(far)) if far else None   # 한두 줄 잘못 잡혀도 괜찮게 중앙값
         limit = float(self.p.get("light_stop_dist_m", LIGHT_STOP_DIST_M))
+        if not self.go:                                           # 주행 중일 때만 판단 (서 있을 땐 매 프레임 다시 걸리지 않게)
+            return
         if self.hold:
             if self.light == "go":
                 self.hold = False; self.cool_until = now + LIGHT_COOLDOWN_SEC
@@ -150,6 +156,7 @@ class Tunable(Node):
             go = time.time() < float(open(GO).read())
         except (OSError, ValueError):
             go = False
+        self.go = go
         if not go:
             self.hold = False                     # 주행이 끝나면 신호 정지도 풂 (다음 출발에 남지 않게)
         if stale or self.hold:

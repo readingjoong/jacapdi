@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 공통 설정·함수 + 보조 명령 (호스트에서 실행). car_prep.sh / car_go.sh 가 source 한다.
 #   준비: ~/jacapdi-docker/car_prep.sh      출발: ~/jacapdi-docker/car_go.sh [초]
-#   ~/jacapdi-docker/car.sh stop [all]   비상 정지.  all = 파이프라인까지 끄고 요약
+#   ~/jacapdi-docker/car.sh stop [all]   비상 정지.  all = 파이프라인·슬라이더 창까지 끄고 요약
 #   ~/jacapdi-docker/car.sh all [초]     car_prep → 엔터 → car_go
 #   ~/jacapdi-docker/car.sh lap [초]     car_prep → 차선 인식 확인 → 5초 카운트다운 → car_go (기본 75초)
 #   ~/jacapdi-docker/car.sh lane 1|2     달릴 차선 바꾸기 (주행 중에도, lane_change_sec 동안 부드럽게 옮김)
@@ -86,8 +86,9 @@ stop() {
   send_stop
   if [ "$1" = all ]; then
     docker exec $C bash -c "pkill -INT -f '^bash $D/pipeline.sh'; sleep 6; pkill -9 -f '[p]ython3 $D/nodes/'" >/dev/null 2>&1   # ^, [p]: bash -c 자신과 안 맞게
+    pkill -f "[p]ython3 .*tune_gui\.py" 2>/dev/null   # car_prep 이 띄운 슬라이더 창도 같이 닫음
     local RUN; RUN=$(cat /tmp/car_run_dir 2>/dev/null); [ -f "$RUN/summary.txt" ] && head -8 "$RUN/summary.txt"
-    say "파이프라인 종료"
+    say "파이프라인 + 슬라이더 종료"
   fi
 }
 
